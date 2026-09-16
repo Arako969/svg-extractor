@@ -3436,46 +3436,60 @@ class ColoringRegionExtractor(tk.Tk):
 
     def _outline_svg_path_data(self):
         """
-        Convert the binary outline mask into smooth compound SVG Bezier paths.
+        Export the black outline as a thickness-preserving smooth vector path.
 
-        The visual outline is processed only for SVG export:
-        1. Smooth the raster boundary with a light Gaussian blur.
-        2. Remove staircase noise with adaptive contour simplification.
-        3. Convert closed contours into cubic Bezier curves.
+        Important:
+        The previous blur-based smoothing changed the inner and outer boundary
+        independently. That could make the black line locally thinner and could
+        expose white seams between fills and outline.
 
-        Region detection, game-area masks and JSON geometry stay unchanged.
-        RETR_TREE plus fill-rule="evenodd" continues to preserve holes.
+        This version instead:
+        1. supersamples the original binary line mask,
+        2. traces the supersampled silhouette,
+        3. simplifies only very lightly,
+        4. converts the contour to gentle cubic curves,
+        5. scales the coordinates back to the original canvas.
+
+        The original outline thickness is therefore preserved much better.
+        Game-area masks and JSON geometry remain unchanged.
         """
         if self.line_mask is None:
             return ""
 
+        scale = 4
+
         mask = (self.line_mask > 0).astype(np.uint8) * 255
 
-        padded = cv2.copyMakeBorder(
+        # Supersampling creates sub-pixel boundary information without first
+        # shrinking the original black line through Gaussian thresholding.
+        hi = cv2.resize(
             mask,
-            3, 3, 3, 3,
-            cv2.BORDER_CONSTANT,
-            value=0,
+            None,
+            fx=scale,
+            fy=scale,
+            interpolation=cv2.INTER_CUBIC,
         )
 
-        blurred = cv2.GaussianBlur(
-            padded,
-            (0, 0),
-            sigmaX=1.15,
-            sigmaY=1.15,
-        )
-
-        _, smooth_mask = cv2.threshold(
-            blurred,
-            112,
+        _, hi = cv2.threshold(
+            hi,
+            127,
             255,
             cv2.THRESH_BINARY,
         )
 
-        smooth_mask = smooth_mask[3:-3, 3:-3]
+        # Close only microscopic interpolation pinholes at supersampled scale.
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (3, 3),
+        )
+        hi = cv2.morphologyEx(
+            hi,
+            cv2.MORPH_CLOSE,
+            kernel,
+        )
 
         contours, _hierarchy = cv2.findContours(
-            smooth_mask,
+            hi,
             cv2.RETR_TREE,
             cv2.CHAIN_APPROX_NONE,
         )
@@ -3486,16 +3500,18 @@ class ColoringRegionExtractor(tk.Tk):
         subpaths = []
 
         for contour in contours:
-            if len(contour) < 6:
+            if len(contour) < 8:
                 continue
 
             perimeter = cv2.arcLength(contour, True)
 
+            # Measured in supersampled pixels.
+            # Keep considerably more geometry than the previous version.
             epsilon = max(
-                0.55,
+                1.6,
                 min(
-                    2.4,
-                    perimeter * 0.00135,
+                    5.0,
+                    perimeter * 0.00045,
                 ),
             )
 
@@ -3505,18 +3521,23 @@ class ColoringRegionExtractor(tk.Tk):
                 True,
             )
 
-            points = approx.reshape(-1, 2).astype(np.float64)
+            points = (
+                approx.reshape(-1, 2).astype(np.float64)
+                / float(scale)
+            )
 
             if len(points) < 3:
                 continue
 
-            area = abs(cv2.contourArea(approx))
-            if area < 1.5:
+            area = abs(cv2.contourArea(approx)) / float(scale * scale)
+            if area < 1.0:
                 continue
 
+            # Lower tension than before. This gives visibly smooth curves while
+            # avoiding the strong Bezier overshoot that changed line thickness.
             subpath = self._closed_catmull_rom_svg_path(
                 points,
-                tension=0.92,
+                tension=0.42,
             )
 
             if subpath:
@@ -3525,14 +3546,15 @@ class ColoringRegionExtractor(tk.Tk):
         return " ".join(subpaths)
 
 
-    def _svg_fill_points_with_outline_bleed(self, region, bleed_px=2):
+    def _svg_fill_points_with_outline_bleed(self, region, bleed_px=3):
         """
-        Build visual-only SVG fill geometry with a small bleed into black
-        outline pixels. The gameplay mask and JSON geometry stay unchanged.
+        Build visual-only SVG fill geometry with a small safety overlap.
 
-        Expansion is constrained to the original region plus the detected
-        line mask, so the fill can hide raster/vector seams beneath black
-        outlines without bleeding into neighboring color interiors.
+        The fill may expand only into the original black outline plus a
+        one-pixel safety halo around it. This compensates for the tiny boundary
+        movement introduced by vector smoothing and prevents white seams.
+
+        Gameplay masks, region geometry and JSON data are not changed.
         """
         points = region.get("points", [])
 
@@ -3544,21 +3566,41 @@ class ColoringRegionExtractor(tk.Tk):
             return points
 
         src = mask.astype(np.uint8) * 255
+
         radius = max(1, int(bleed_px))
         size = radius * 2 + 1
-        kernel = cv2.getStructuringElement(
+        bleed_kernel = cv2.getStructuringElement(
             cv2.MORPH_ELLIPSE,
             (size, size),
         )
 
-        expanded = cv2.dilate(src, kernel, iterations=1) > 0
-        line_pixels = self.line_mask > 0
+        expanded = cv2.dilate(
+            src,
+            bleed_kernel,
+            iterations=1,
+        ) > 0
 
-        # Only allow visual expansion into pixels belonging to the black
-        # outline. This prevents the bleed from entering neighboring fills.
+        # One-pixel safety halo around the original black line. The visible
+        # vector outline remains on top, so this extra fill is normally hidden.
+        outline_src = (self.line_mask > 0).astype(np.uint8) * 255
+        halo_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (3, 3),
+        )
+        outline_coverage = cv2.dilate(
+            outline_src,
+            halo_kernel,
+            iterations=1,
+        ) > 0
+
+        allowed = np.logical_or(
+            mask,
+            outline_coverage,
+        )
+
         visual_mask = np.logical_and(
             expanded,
-            np.logical_or(mask, line_pixels),
+            allowed,
         )
 
         contour_img = visual_mask.astype(np.uint8) * 255
@@ -3571,7 +3613,11 @@ class ColoringRegionExtractor(tk.Tk):
         if not contours:
             return points
 
-        contour = max(contours, key=cv2.contourArea)
+        contour = max(
+            contours,
+            key=cv2.contourArea,
+        )
+
         approx = cv2.approxPolyDP(
             contour,
             float(self.simplify_var.get()),
@@ -3579,6 +3625,7 @@ class ColoringRegionExtractor(tk.Tk):
         )
 
         bleed_points = approx.reshape(-1, 2)
+
         if len(bleed_points) < 3:
             return points
 
