@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Coloring Region Extractor v5
+Coloring Region Extractor v6
 
 Features:
 - Automatic closed-region detection
@@ -21,7 +21,7 @@ Requirements:
     pip install opencv-python pillow numpy
 
 Run:
-    python3 coloring_region_extractor_gui_v5.py
+    python3 coloring_region_extractor_gui_v6.py
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ class ColoringRegionExtractor(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("Coloring Region Extractor v5")
+        self.title("Coloring Region Extractor v6")
         self.geometry("1720x980")
         self.minsize(1050, 700)
         self.resizable(True, True)
@@ -70,6 +70,8 @@ class ColoringRegionExtractor(tk.Tk):
         self.dark_threshold_var = tk.IntVar(value=45)
         self.light_threshold_var = tk.IntVar(value=245)
         self.use_real_colors_var = tk.BooleanVar(value=True)
+        self.split_min_area_var = tk.IntVar(value=180)
+        self.split_smooth_var = tk.IntVar(value=3)
 
         # Preview
         self.preview_photo: ImageTk.PhotoImage | None = None
@@ -317,6 +319,54 @@ class ColoringRegionExtractor(tk.Tk):
             text="Farben automatisch analysieren",
             command=self.analyze_colors,
         ).pack(fill="x", pady=(6, 4))
+
+        ttk.Separator(left).pack(fill="x", pady=8)
+
+        ttk.Label(
+            left,
+            text="Farbbasierte Unterregionen",
+            font=("Helvetica", 12, "bold"),
+        ).pack(anchor="w")
+
+        ttk.Label(
+            left,
+            text=(
+                "Für Bereiche ohne schwarze Trennlinie. "
+                "Die Hauptregion bleibt als Grundfläche erhalten; "
+                "abweichende Farbflächen werden als darüberliegende "
+                "Unterregionen erzeugt."
+            ),
+            wraplength=390,
+            justify="left",
+        ).pack(anchor="w", pady=(3, 5))
+
+        self._add_slider(
+            left,
+            "Min. Unterregion",
+            self.split_min_area_var,
+            20,
+            3000,
+        )
+
+        self._add_slider(
+            left,
+            "Farbmasken glätten",
+            self.split_smooth_var,
+            1,
+            15,
+        )
+
+        ttk.Button(
+            left,
+            text="Auswahl nach Farben aufteilen",
+            command=self.split_selected_regions_by_color,
+        ).pack(fill="x", pady=(5, 2))
+
+        ttk.Button(
+            left,
+            text="Unterregionen der Auswahl löschen",
+            command=self.remove_color_subregions_for_selection,
+        ).pack(fill="x", pady=2)
 
         ttk.Label(left, text="Erkannte Palette").pack(anchor="w", pady=(4, 2))
 
@@ -761,6 +811,10 @@ class ColoringRegionExtractor(tk.Tk):
                     "active": old_active.get(label_id, True),
                     "target_color": None,
                     "suggested_color_id": None,
+                    "parent_id": None,
+                    "is_overlay": False,
+                    "priority": 0,
+                    "mask": None,
                 }
             )
 
@@ -910,7 +964,9 @@ class ColoringRegionExtractor(tk.Tk):
         if self.color_bgr is None or self.labels is None:
             return None
 
-        mask = self.labels == region["source_label"]
+        mask = self._region_mask(region)
+        if mask is None:
+            return None
         pixels = self.color_bgr[mask]
 
         return self._representative_color(pixels)
@@ -924,7 +980,9 @@ class ColoringRegionExtractor(tk.Tk):
         for rid in group["region_ids"]:
             region = self._region_by_id(rid)
             if region and region["active"]:
-                masks.append(self.labels == region["source_label"])
+                mask = self._region_mask(region)
+                if mask is not None:
+                    masks.append(mask)
 
         if not masks:
             return None
@@ -1075,6 +1133,285 @@ class ColoringRegionExtractor(tk.Tk):
             if x >= width:
                 break
 
+
+    # ------------------------------------------------------------------
+    # Color-based subregions
+    # ------------------------------------------------------------------
+
+    def _region_mask(self, region):
+        """Return a boolean pixel mask for an original or generated region."""
+        stored = region.get("mask")
+        if stored is not None:
+            return stored.astype(bool)
+
+        source_label = region.get("source_label")
+        if source_label is not None and self.labels is not None:
+            return self.labels == source_label
+
+        # Reconstruct generated masks from polygon points when loading a project.
+        if self.labels is None:
+            return None
+
+        points = region.get("points") or []
+        if len(points) < 3:
+            return None
+
+        mask = np.zeros(self.labels.shape, dtype=np.uint8)
+        pts = np.array(points, dtype=np.int32)
+        cv2.fillPoly(mask, [pts], 255)
+        region["mask"] = mask.astype(bool)
+        return region["mask"]
+
+    def _palette_label_map_for_mask(self, region_mask):
+        """Map pixels in a mask to nearest current palette color in Lab space."""
+        if self.color_bgr is None or not self.palette:
+            return None
+
+        h, w = region_mask.shape
+        result = np.zeros((h, w), dtype=np.int16)
+
+        # Smooth the reference image slightly to suppress antialiasing/noise.
+        smooth_size = max(1, int(self.split_smooth_var.get()))
+        if smooth_size % 2 == 0:
+            smooth_size += 1
+
+        color_img = self.color_bgr
+        if smooth_size > 1:
+            color_img = cv2.medianBlur(color_img, smooth_size)
+
+        pixels_bgr = color_img[region_mask]
+        if len(pixels_bgr) == 0:
+            return result
+
+        pixels_lab = cv2.cvtColor(
+            pixels_bgr.reshape(-1, 1, 3),
+            cv2.COLOR_BGR2LAB,
+        ).reshape(-1, 3).astype(np.float32)
+
+        centers = []
+        ids = []
+
+        for entry in self.palette:
+            rgb = np.array(entry["rgb"], dtype=np.uint8).reshape(1, 1, 3)
+            bgr = rgb[:, :, ::-1]
+            lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).reshape(3).astype(np.float32)
+            centers.append(lab)
+            ids.append(int(entry["id"]))
+
+        centers = np.array(centers, dtype=np.float32)
+
+        # Squared Euclidean distance in Lab.
+        dists = ((pixels_lab[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2)
+        nearest = np.argmin(dists, axis=1)
+
+        mapped = np.array([ids[i] for i in nearest], dtype=np.int16)
+        result[region_mask] = mapped
+
+        return result
+
+    def split_selected_regions_by_color(self):
+        """
+        Keep each selected original region as the base area and create
+        additional overlay regions for sufficiently large secondary colors.
+        This handles e.g. beige muzzle/paws inside one orange dog region.
+        """
+        if self.color_bgr is None:
+            messagebox.showinfo(
+                "Hinweis",
+                "Bitte zuerst eine kolorierte Farbvorlage laden.",
+            )
+            return
+
+        if not self.palette:
+            self.analyze_colors()
+            if not self.palette:
+                return
+
+        if not self.selected_region_ids:
+            messagebox.showinfo(
+                "Hinweis",
+                "Bitte zuerst mindestens eine große Region auswählen.",
+            )
+            return
+
+        selected_base_ids = []
+        for rid in sorted(self.selected_region_ids):
+            region = self._region_by_id(rid)
+            if region and not region.get("is_overlay", False):
+                selected_base_ids.append(rid)
+
+        if not selected_base_ids:
+            messagebox.showinfo(
+                "Hinweis",
+                "Bitte eine normale Grundregion auswählen, nicht nur eine Unterregion.",
+            )
+            return
+
+        # Delete old generated overlays for these parents before recalculating.
+        self._remove_overlays_by_parent_ids(set(selected_base_ids))
+
+        min_area = max(1, int(self.split_min_area_var.get()))
+        created = 0
+
+        next_id = max([r["id"] for r in self.regions], default=0) + 1
+
+        for parent_id in selected_base_ids:
+            parent = self._region_by_id(parent_id)
+            if not parent:
+                continue
+
+            parent_mask = self._region_mask(parent)
+            if parent_mask is None or not parent_mask.any():
+                continue
+
+            color_map = self._palette_label_map_for_mask(parent_mask)
+            if color_map is None:
+                continue
+
+            ids, counts = np.unique(color_map[parent_mask], return_counts=True)
+            valid_pairs = [(int(i), int(c)) for i, c in zip(ids, counts) if int(i) > 0]
+
+            if len(valid_pairs) <= 1:
+                continue
+
+            # Dominant color remains represented by the parent/base region.
+            dominant_color_id = max(valid_pairs, key=lambda item: item[1])[0]
+            parent["suggested_color_id"] = dominant_color_id
+            parent["target_color"] = list(self._palette_rgb(dominant_color_id) or parent.get("target_color") or [217,217,217])
+
+            for color_id, _count in valid_pairs:
+                if color_id == dominant_color_id:
+                    continue
+
+                color_mask = ((color_map == color_id) & parent_mask).astype(np.uint8) * 255
+
+                # Clean small speckles but keep real islands.
+                kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+                color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_OPEN, kernel)
+                color_mask = cv2.morphologyEx(color_mask, cv2.MORPH_CLOSE, kernel)
+
+                n, comps, stats, cents = cv2.connectedComponentsWithStats(
+                    (color_mask > 0).astype(np.uint8),
+                    connectivity=8,
+                )
+
+                for comp_id in range(1, n):
+                    area = int(stats[comp_id, cv2.CC_STAT_AREA])
+                    if area < min_area:
+                        continue
+
+                    comp_mask = comps == comp_id
+
+                    contour_img = comp_mask.astype(np.uint8) * 255
+                    contours, _ = cv2.findContours(
+                        contour_img,
+                        cv2.RETR_EXTERNAL,
+                        cv2.CHAIN_APPROX_SIMPLE,
+                    )
+                    if not contours:
+                        continue
+
+                    contour = max(contours, key=cv2.contourArea)
+                    approx = cv2.approxPolyDP(
+                        contour,
+                        float(self.simplify_var.get()),
+                        True,
+                    )
+                    points = approx.reshape(-1, 2)
+                    if len(points) < 3:
+                        continue
+
+                    x = int(stats[comp_id, cv2.CC_STAT_LEFT])
+                    y = int(stats[comp_id, cv2.CC_STAT_TOP])
+                    ww = int(stats[comp_id, cv2.CC_STAT_WIDTH])
+                    hh = int(stats[comp_id, cv2.CC_STAT_HEIGHT])
+                    cx, cy = cents[comp_id]
+
+                    rgb = self._palette_rgb(color_id)
+
+                    self.regions.append(
+                        {
+                            "id": next_id,
+                            "source_label": None,
+                            "area": area,
+                            "bbox": [x, y, ww, hh],
+                            "centroid": [float(cx), float(cy)],
+                            "points": points.tolist(),
+                            "active": True,
+                            "target_color": list(rgb) if rgb is not None else None,
+                            "suggested_color_id": color_id,
+                            "parent_id": parent_id,
+                            "is_overlay": True,
+                            "priority": 1,
+                            "mask": comp_mask.copy(),
+                        }
+                    )
+
+                    next_id += 1
+                    created += 1
+
+        self.regions.sort(key=lambda r: (int(r.get("priority", 0)), int(r["id"])))
+
+        self.selected_region_ids.clear()
+        self._update_counts()
+        self.refresh_preview()
+
+        self.status_var.set(
+            f"{created} farbbasierte Unterregionen erzeugt. "
+            "Die Grundflächen bleiben darunter erhalten."
+        )
+
+    def _remove_overlays_by_parent_ids(self, parent_ids):
+        remove_ids = {
+            r["id"]
+            for r in self.regions
+            if r.get("is_overlay", False) and r.get("parent_id") in parent_ids
+        }
+
+        if not remove_ids:
+            return
+
+        self.regions = [
+            r for r in self.regions
+            if r["id"] not in remove_ids
+        ]
+
+        self.selected_region_ids -= remove_ids
+
+        for group in self.groups.values():
+            group["region_ids"] -= remove_ids
+
+        self._remove_empty_groups()
+
+    def remove_color_subregions_for_selection(self):
+        if not self.selected_region_ids:
+            return
+
+        parent_ids = set()
+
+        for rid in self.selected_region_ids:
+            region = self._region_by_id(rid)
+            if not region:
+                continue
+
+            if region.get("is_overlay", False):
+                parent_ids.add(region.get("parent_id"))
+            else:
+                parent_ids.add(region["id"])
+
+        parent_ids.discard(None)
+
+        self._remove_overlays_by_parent_ids(parent_ids)
+        self.selected_region_ids.clear()
+
+        self._refresh_group_list()
+        self._update_counts()
+        self.refresh_preview()
+
+        self.status_var.set(
+            "Farbbasierte Unterregionen der Auswahl wurden entfernt."
+        )
+
     # ------------------------------------------------------------------
     # Helpers / groups
     # ------------------------------------------------------------------
@@ -1174,7 +1511,9 @@ class ColoringRegionExtractor(tk.Tk):
             grouped_ids |= set(group["region_ids"])
 
         for region in self.regions:
-            mask = self.labels == region["source_label"]
+            mask = self._region_mask(region)
+            if mask is None:
+                continue
 
             if not region["active"]:
                 if self.show_inactive_var.get():
@@ -1232,9 +1571,10 @@ class ColoringRegionExtractor(tk.Tk):
             if not region:
                 continue
 
-            mask = (
-                self.labels == region["source_label"]
-            ).astype(np.uint8) * 255
+            rmask = self._region_mask(region)
+            if rmask is None:
+                continue
+            mask = rmask.astype(np.uint8) * 255
 
             contours, _ = cv2.findContours(
                 mask,
@@ -1446,14 +1786,25 @@ class ColoringRegionExtractor(tk.Tk):
             self.refresh_preview()
             return
 
-        source_label = int(self.labels[y, x])
-
         clicked = None
 
+        # Generated color subregions should win over their larger base region.
+        candidates = []
         for region in self.regions:
-            if region["source_label"] == source_label:
-                clicked = region
-                break
+            if not region.get("active", True):
+                continue
+            mask = self._region_mask(region)
+            if mask is not None and bool(mask[y, x]):
+                candidates.append(region)
+
+        if candidates:
+            clicked = sorted(
+                candidates,
+                key=lambda r: (
+                    -int(r.get("priority", 0)),
+                    int(r.get("area", 0)),
+                ),
+            )[0]
 
         if not clicked:
             if not (event.state & 0x0001):
@@ -1946,6 +2297,12 @@ class ColoringRegionExtractor(tk.Tk):
         self.ignore_light_var.set(
             color_params.get("ignore_light", True)
         )
+        self.split_min_area_var.set(
+            color_params.get("split_min_area", 180)
+        )
+        self.split_smooth_var.set(
+            color_params.get("split_smooth", 3)
+        )
 
         # Build current region geometry.
         self.analyze()
@@ -1999,6 +2356,40 @@ class ColoringRegionExtractor(tk.Tk):
             "palette",
             [],
         )
+
+        # Restore generated color subregions saved in the project.
+        current_ids = {r["id"] for r in self.regions}
+        for saved in data.get("regions", []):
+            if not saved.get("is_overlay", False):
+                continue
+
+            rid = int(saved["id"])
+            if rid in current_ids:
+                continue
+
+            points = saved.get("points", [])
+            if len(points) < 3:
+                continue
+
+            mask = np.zeros(self.labels.shape, dtype=np.uint8)
+            pts = np.array(points, dtype=np.int32)
+            cv2.fillPoly(mask, [pts], 255)
+
+            self.regions.append({
+                "id": rid,
+                "source_label": None,
+                "area": int(saved.get("area", int((mask > 0).sum()))),
+                "bbox": saved.get("bbox", [0,0,0,0]),
+                "centroid": saved.get("centroid", [0.0,0.0]),
+                "points": points,
+                "active": saved.get("active", True),
+                "target_color": saved.get("target_color"),
+                "suggested_color_id": saved.get("suggested_color_id"),
+                "parent_id": saved.get("parent_id"),
+                "is_overlay": True,
+                "priority": int(saved.get("priority", 1)),
+                "mask": mask.astype(bool),
+            })
 
         self.groups.clear()
         max_gid = 0
@@ -2072,6 +2463,8 @@ class ColoringRegionExtractor(tk.Tk):
                 "ignore_light": bool(self.ignore_light_var.get()),
                 "dark_threshold": int(self.dark_threshold_var.get()),
                 "light_threshold": int(self.light_threshold_var.get()),
+                "split_min_area": int(self.split_min_area_var.get()),
+                "split_smooth": int(self.split_smooth_var.get()),
             },
             "palette": self.palette,
             "regions": [
@@ -2084,6 +2477,9 @@ class ColoringRegionExtractor(tk.Tk):
                     "points": region["points"],
                     "target_color": region.get("target_color"),
                     "suggested_color_id": region.get("suggested_color_id"),
+                    "parent_id": region.get("parent_id"),
+                    "is_overlay": bool(region.get("is_overlay", False)),
+                    "priority": int(region.get("priority", 0)),
                 }
                 for region in self.regions
             ],
@@ -2202,6 +2598,8 @@ class ColoringRegionExtractor(tk.Tk):
                     (
                         f'<path id="group_{gid:03d}_region_{region["id"]:03d}" '
                         f'data-region-id="{region["id"]}" '
+                        f'data-priority="{int(region.get("priority", 0))}" '
+                        f'data-parent-id="{region.get("parent_id") if region.get("parent_id") is not None else ""}" '
                         f'd="{d}" fill="{color_hex}" stroke="none"/>'
                     )
                 )
@@ -2248,6 +2646,8 @@ class ColoringRegionExtractor(tk.Tk):
                 (
                     f'<path id="region_{region["id"]:03d}" '
                     f'data-region-id="{region["id"]}" '
+                    f'data-priority="{int(region.get("priority", 0))}" '
+                    f'data-parent-id="{region.get("parent_id") if region.get("parent_id") is not None else ""}" '
                     f'd="{d}" fill="{color_hex}" stroke="none"/>'
                 )
             )
@@ -2353,6 +2753,9 @@ class ColoringRegionExtractor(tk.Tk):
                     "region_id": region["id"],
                     "color_id": region.get("suggested_color_id"),
                     "target_color": region.get("target_color"),
+                    "parent_id": region.get("parent_id"),
+                    "is_overlay": bool(region.get("is_overlay", False)),
+                    "priority": int(region.get("priority", 0)),
                 }
                 for region in self.regions
                 if (
