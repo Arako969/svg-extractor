@@ -52,6 +52,7 @@ class ColoringRegionExtractor(tk.Tk):
 
         self.show_numbers_var = tk.BooleanVar(value=True)
         self.show_inactive_var = tk.BooleanVar(value=True)
+        self.include_border_var = tk.BooleanVar(value=True)
 
         self.status_var = tk.StringVar(value="Bitte ein Bild öffnen.")
         self.region_count_var = tk.StringVar(value="Regionen: 0")
@@ -125,6 +126,12 @@ class ColoringRegionExtractor(tk.Tk):
             text="Deaktivierte Regionen anzeigen",
             variable=self.show_inactive_var,
             command=self.refresh_preview,
+        ).pack(anchor="w", pady=2)
+
+        ttk.Checkbutton(
+            left,
+            text="Bildrand als Grenze verwenden",
+            variable=self.include_border_var,
         ).pack(anchor="w", pady=2)
 
         ttk.Separator(left).pack(fill="x", pady=12)
@@ -297,8 +304,9 @@ class ColoringRegionExtractor(tk.Tk):
             if area < min_area:
                 continue
 
-            # Regions touching the image edge are treated as open background.
-            if label_id in border_labels:
+            # Optional: regions touching the image edge can still be valid
+            # coloring areas. When enabled, the image edge acts like a closed wall.
+            if (not self.include_border_var.get()) and label_id in border_labels:
                 continue
 
             region_mask = np.zeros_like(binary, dtype=np.uint8)
@@ -639,6 +647,7 @@ class ColoringRegionExtractor(tk.Tk):
                 "close_size": int(self.close_size_var.get()),
                 "min_area": int(self.min_area_var.get()),
                 "simplify_epsilon": float(self.simplify_var.get()),
+                "include_border_regions": bool(self.include_border_var.get()),
             },
             "regions": [
                 {
