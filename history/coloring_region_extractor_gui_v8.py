@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Coloring Region Extractor v10
+Coloring Region Extractor v8
 
 Features:
 - Automatic closed-region detection
@@ -21,7 +21,7 @@ Requirements:
     pip install opencv-python pillow numpy
 
 Run:
-    python3 coloring_region_extractor_gui_v10.py
+    python3 coloring_region_extractor_gui_v8.py
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ class ColoringRegionExtractor(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("Coloring Region Extractor v10")
+        self.title("Coloring Region Extractor v8")
         self.geometry("1720x980")
         self.minsize(1050, 700)
         self.resizable(True, True)
@@ -86,11 +86,6 @@ class ColoringRegionExtractor(tk.Tk):
         self.display_scale = 1.0
         self.display_offset_x = 0
         self.display_offset_y = 0
-        self.zoom_factor = 1.0
-        self.pan_x = 0.0
-        self.pan_y = 0.0
-        self._pan_start = None
-        self._pan_origin = None
 
         # Region parameters
         self.threshold_var = tk.IntVar(value=190)
@@ -129,12 +124,10 @@ class ColoringRegionExtractor(tk.Tk):
         paned.pack(fill="both", expand=True)
 
         left_holder = ttk.Frame(paned)
-        preview_holder = ttk.Frame(paned)
-        right_holder = ttk.Frame(paned)
+        right = ttk.Frame(paned)
 
         paned.add(left_holder, weight=0)
-        paned.add(preview_holder, weight=1)
-        paned.add(right_holder, weight=0)
+        paned.add(right, weight=1)
 
         # Scrollable left control panel.
         self.left_canvas = tk.Canvas(
@@ -494,37 +487,14 @@ class ColoringRegionExtractor(tk.Tk):
 
         ttk.Separator(left).pack(fill="x", pady=10)
 
-        # Scrollable right control panel.
-        self.right_canvas = tk.Canvas(
-            right_holder, width=400, highlightthickness=0, borderwidth=0
-        )
-        right_scroll = ttk.Scrollbar(
-            right_holder, orient="vertical", command=self.right_canvas.yview
-        )
-        self.right_canvas.configure(yscrollcommand=right_scroll.set)
-        right_scroll.pack(side="right", fill="y")
-        self.right_canvas.pack(side="left", fill="both", expand=True)
-        controls_right = ttk.Frame(self.right_canvas, padding=12)
-        self.right_window = self.right_canvas.create_window(
-            (0, 0), window=controls_right, anchor="nw"
-        )
-        controls_right.bind(
-            "<Configure>",
-            lambda _e: self.right_canvas.configure(scrollregion=self.right_canvas.bbox("all")),
-        )
-        self.right_canvas.bind(
-            "<Configure>",
-            lambda e: self.right_canvas.itemconfigure(self.right_window, width=e.width),
-        )
-
         # Selection
         ttk.Label(
-            controls_right,
+            left,
             text="Auswahl und Game Areas",
             font=("Helvetica", 13, "bold"),
         ).pack(anchor="w")
 
-        modes = ttk.Frame(controls_right)
+        modes = ttk.Frame(left)
         modes.pack(fill="x", pady=(4, 6))
 
         ttk.Radiobutton(
@@ -541,31 +511,23 @@ class ColoringRegionExtractor(tk.Tk):
             variable=self.mode_var,
         ).pack(side="left", padx=(12, 0))
 
-        ttk.Radiobutton(
-            modes,
-            text="Fehlende Fläche hinzufügen",
-            value="manual_add",
-            variable=self.mode_var,
-        ).pack(side="left", padx=(12, 0))
-
         ttk.Label(
-            controls_right,
+            left,
             text=(
                 "Klick: eine Region auswählen\n"
                 "Shift + Klick: Auswahl erweitern/entfernen\n"
-                "Label setzen: Gruppe wählen und ins Bild klicken\n"
-                "Fehlende Fläche hinzufügen: direkt in die kleine Fläche klicken"
+                "Label setzen: Gruppe wählen und ins Bild klicken"
             ),
             justify="left",
         ).pack(anchor="w", pady=(0, 7))
 
         ttk.Button(
-            controls_right,
+            left,
             text="Auswahl löschen",
             command=self.clear_selection,
         ).pack(fill="x", pady=2)
 
-        row = ttk.Frame(controls_right)
+        row = ttk.Frame(left)
         row.pack(fill="x", pady=(7, 2))
 
         ttk.Label(row, text="Gruppenname").pack(side="left")
@@ -574,7 +536,7 @@ class ColoringRegionExtractor(tk.Tk):
             textvariable=self.group_name_var,
         ).pack(side="right", fill="x", expand=True, padx=(10, 0))
 
-        row = ttk.Frame(controls_right)
+        row = ttk.Frame(left)
         row.pack(fill="x", pady=2)
 
         ttk.Label(row, text="Farb-ID").pack(side="left")
@@ -587,26 +549,26 @@ class ColoringRegionExtractor(tk.Tk):
         ).pack(side="right")
 
         ttk.Button(
-            controls_right,
+            left,
             text="Gruppe aus Auswahl erstellen",
             command=self.create_group,
         ).pack(fill="x", pady=(6, 2))
 
         ttk.Button(
-            controls_right,
+            left,
             text="Auswahl zur gewählten Gruppe",
             command=self.add_selection_to_group,
         ).pack(fill="x", pady=2)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Auswahl aus Gruppen entfernen",
             command=self.remove_selection_from_groups,
         ).pack(fill="x", pady=2)
 
         ttk.Label(left, text="Gruppen").pack(anchor="w", pady=(8, 3))
 
-        list_frame = ttk.Frame(controls_right)
+        list_frame = ttk.Frame(left)
         list_frame.pack(fill="both")
 
         self.group_list = tk.Listbox(
@@ -626,184 +588,118 @@ class ColoringRegionExtractor(tk.Tk):
         self.group_list.bind("<<ListboxSelect>>", self.on_group_selected)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Gewählte Gruppe aktualisieren",
             command=self.update_selected_group,
         ).pack(fill="x", pady=(5, 2))
 
         ttk.Button(
-            controls_right,
+            left,
             text="Farbe der Gruppe aus Vorlage neu bestimmen",
             command=self.analyze_selected_group_color,
         ).pack(fill="x", pady=2)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Label automatisch zentrieren",
             command=self.auto_center_group_label,
         ).pack(fill="x", pady=2)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Gewählte Gruppe löschen",
             command=self.delete_selected_group,
         ).pack(fill="x", pady=2)
 
-        ttk.Separator(controls_right).pack(fill="x", pady=10)
+        ttk.Separator(left).pack(fill="x", pady=10)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Auswahl aktivieren",
             command=lambda: self.set_selection_active(True),
         ).pack(fill="x", pady=2)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Auswahl deaktivieren",
             command=lambda: self.set_selection_active(False),
         ).pack(fill="x", pady=2)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Alle aktivieren",
             command=self.activate_all,
         ).pack(fill="x", pady=2)
 
-        ttk.Separator(controls_right).pack(fill="x", pady=10)
+        ttk.Separator(left).pack(fill="x", pady=10)
 
         ttk.Label(
-            controls_right,
+            left,
             text="Export",
             font=("Helvetica", 13, "bold"),
         ).pack(anchor="w")
 
         ttk.Button(
-            controls_right,
+            left,
             text="Game SVG exportieren",
             command=self.export_svg,
         ).pack(fill="x", pady=(5, 2))
 
         ttk.Button(
-            controls_right,
+            left,
             text="Game JSON exportieren",
             command=self.export_game_json,
         ).pack(fill="x", pady=2)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Outline PNG exportieren",
             command=self.export_outline_png,
         ).pack(fill="x", pady=2)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Vorschau speichern",
             command=self.export_preview,
         ).pack(fill="x", pady=2)
 
         ttk.Label(
-            controls_right,
+            left,
             textvariable=self.status_var,
             wraplength=390,
             justify="left",
         ).pack(anchor="w", pady=(12, 20))
 
-        # Center image preview with zoom controls
-        preview_toolbar = ttk.Frame(preview_holder)
-        preview_toolbar.pack(fill="x", padx=6, pady=6)
-        ttk.Button(preview_toolbar, text="−", width=3, command=lambda: self._zoom_by(1/1.2)).pack(side="left")
-        ttk.Button(preview_toolbar, text="+", width=3, command=lambda: self._zoom_by(1.2)).pack(side="left", padx=(4, 0))
-        ttk.Button(preview_toolbar, text="Ganzes Bild", command=self.reset_zoom).pack(side="left", padx=(8, 0))
-        self.zoom_text_var = tk.StringVar(value="Fit")
-        ttk.Label(preview_toolbar, textvariable=self.zoom_text_var).pack(side="left", padx=10)
-        ttk.Label(preview_toolbar, text="Magic Mouse: scrollen = Zoom · Rechtsklick ziehen = Verschieben").pack(side="right")
-
+        # Right image preview
         self.canvas = tk.Canvas(
-            preview_holder,
+            right,
             bg="#292929",
             highlightthickness=0,
             cursor="hand2",
         )
         self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Button-1>", self.on_canvas_click)
-        self.canvas.bind("<MouseWheel>", self._on_preview_wheel)
-        self.canvas.bind("<Button-4>", lambda e: self._zoom_at(e.x, e.y, 1.12))
-        self.canvas.bind("<Button-5>", lambda e: self._zoom_at(e.x, e.y, 1/1.12))
-        self.canvas.bind("<ButtonPress-2>", self._start_pan)
-        self.canvas.bind("<B2-Motion>", self._do_pan)
-        self.canvas.bind("<ButtonPress-3>", self._start_pan)
-        self.canvas.bind("<B3-Motion>", self._do_pan)
         self.canvas.bind("<Configure>", lambda _e: self.refresh_preview())
 
         self.after(200, lambda: self._set_initial_sash(paned))
 
     def _set_initial_sash(self, paned):
         try:
-            paned.sashpos(0, 420)
-            paned.sashpos(1, max(850, self.winfo_width() - 410))
+            paned.sashpos(0, 440)
         except Exception:
             pass
 
     def _on_mousewheel(self, event):
-        # Scroll whichever sidebar is under the pointer. macOS trackpads and
-        # Magic Mouse often report small delta values, so use direction only.
+        # Only scroll left panel if pointer is over it.
         try:
             widget = self.winfo_containing(event.x_root, event.y_root)
-            target = None
             while widget:
                 if widget == self.left_canvas:
-                    target = self.left_canvas
-                    break
-                if hasattr(self, "right_canvas") and widget == self.right_canvas:
-                    target = self.right_canvas
-                    break
+                    self.left_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                    return
                 widget = widget.master
-            if target is not None and event.delta:
-                target.yview_scroll(-1 if event.delta > 0 else 1, "units")
         except Exception:
             pass
-
-    def reset_zoom(self):
-        self.zoom_factor = 1.0
-        self.pan_x = 0.0
-        self.pan_y = 0.0
-        self.refresh_preview()
-
-    def _zoom_by(self, factor):
-        self._zoom_at(self.canvas.winfo_width()/2, self.canvas.winfo_height()/2, factor)
-
-    def _on_preview_wheel(self, event):
-        if not event.delta:
-            return
-        # Smooth enough for Magic Mouse/trackpad, while avoiding huge jumps.
-        magnitude = min(3.0, max(0.35, abs(event.delta) / 120.0))
-        factor = 1.10 ** magnitude
-        if event.delta < 0:
-            factor = 1.0 / factor
-        self._zoom_at(event.x, event.y, factor)
-        return "break"
-
-    def _zoom_at(self, canvas_x, canvas_y, factor):
-        old_scale = max(1e-9, self.display_scale)
-        image_x = (canvas_x - self.display_offset_x) / old_scale
-        image_y = (canvas_y - self.display_offset_y) / old_scale
-        self.zoom_factor = min(12.0, max(1.0, self.zoom_factor * factor))
-        self.refresh_preview()
-        new_scale = max(1e-9, self.display_scale)
-        self.pan_x += canvas_x - (self.display_offset_x + image_x * new_scale)
-        self.pan_y += canvas_y - (self.display_offset_y + image_y * new_scale)
-        self.refresh_preview()
-
-    def _start_pan(self, event):
-        self._pan_start = (event.x, event.y)
-        self._pan_origin = (self.pan_x, self.pan_y)
-
-    def _do_pan(self, event):
-        if not self._pan_start or not self._pan_origin:
-            return
-        self.pan_x = self._pan_origin[0] + event.x - self._pan_start[0]
-        self.pan_y = self._pan_origin[1] + event.y - self._pan_start[1]
-        self.refresh_preview()
 
     def _add_slider(self, parent, label, variable, minimum, maximum, is_float=False):
         frame = ttk.Frame(parent)
@@ -2139,20 +2035,6 @@ class ColoringRegionExtractor(tk.Tk):
 
         preview[self.line_mask > 0] = (25, 25, 25)
 
-        # Mark manually added regions in green.
-        for region in self.regions:
-            if not region.get("is_manual", False) or not region.get("active", True):
-                continue
-            rmask = self._region_mask(region)
-            if rmask is None:
-                continue
-            contours, _ = cv2.findContours(
-                rmask.astype(np.uint8) * 255,
-                cv2.RETR_EXTERNAL,
-                cv2.CHAIN_APPROX_SIMPLE,
-            )
-            cv2.drawContours(preview, contours, -1, (60, 255, 60), 2)
-
         # Mark automatically recovered regions so they are easy to review.
         for region in self.regions:
             if not region.get("is_recovered", False) or not region.get("active", True):
@@ -2206,12 +2088,9 @@ class ColoringRegionExtractor(tk.Tk):
                     continue
                 if self._group_for_region(region["id"]):
                     continue
-                if (
-                    not region.get("force_label", False)
-                    and region["area"] < max(
-                        500,
-                        int(self.min_area_var.get()) * 2,
-                    )
+                if region["area"] < max(
+                    500,
+                    int(self.min_area_var.get()) * 2,
                 ):
                     continue
 
@@ -2324,10 +2203,13 @@ class ColoringRegionExtractor(tk.Tk):
 
         h, w = preview.shape[:2]
 
-        # Base scale always fits the complete artwork into the available
-        # preview height/width. zoom_factor is relative to that fitted view.
-        fit_scale = max(0.01, min(canvas_w / w, canvas_h / h))
-        scale = fit_scale * self.zoom_factor
+        scale = max(
+            0.01,
+            min(
+                canvas_w / w,
+                canvas_h / h,
+            ),
+        )
 
         display_w = max(1, int(w * scale))
         display_h = max(1, int(h * scale))
@@ -2340,10 +2222,8 @@ class ColoringRegionExtractor(tk.Tk):
         self.preview_photo = ImageTk.PhotoImage(pil)
 
         self.display_scale = scale
-        self.display_offset_x = (canvas_w - display_w) // 2 + int(self.pan_x)
-        self.display_offset_y = (canvas_h - display_h) // 2 + int(self.pan_y)
-        if hasattr(self, "zoom_text_var"):
-            self.zoom_text_var.set("Fit" if abs(self.zoom_factor - 1.0) < 0.001 else f"{self.zoom_factor * 100:.0f}%")
+        self.display_offset_x = (canvas_w - display_w) // 2
+        self.display_offset_y = (canvas_h - display_h) // 2
 
         self.canvas.delete("all")
         self.canvas.create_image(
@@ -2351,239 +2231,6 @@ class ColoringRegionExtractor(tk.Tk):
             self.display_offset_y,
             image=self.preview_photo,
             anchor="nw",
-        )
-
-
-    # ------------------------------------------------------------------
-    # Manual missing-region recovery
-    # ------------------------------------------------------------------
-
-    def _raw_component_at(self, x, y):
-        """Find the raw white component at a click without morphology closing."""
-        if self.gray is None:
-            return None
-
-        threshold = int(self.threshold_var.get())
-        raw_line = (self.gray < threshold).astype(np.uint8) * 255
-        raw_white = cv2.bitwise_not(raw_line)
-        raw_binary = (raw_white > 0).astype(np.uint8)
-
-        h, w = raw_binary.shape
-        if not (0 <= x < w and 0 <= y < h) or raw_binary[y, x] == 0:
-            return None
-
-        _count, labels, stats, centroids = cv2.connectedComponentsWithStats(
-            raw_binary, connectivity=8
-        )
-
-        label_id = int(labels[y, x])
-        if label_id <= 0:
-            return None
-
-        area = int(stats[label_id, cv2.CC_STAT_AREA])
-        mask = labels == label_id
-
-        contour_img = mask.astype(np.uint8) * 255
-        contours, _ = cv2.findContours(
-            contour_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-        if not contours:
-            return None
-
-        contour = max(contours, key=cv2.contourArea)
-        approx = cv2.approxPolyDP(
-            contour, float(self.simplify_var.get()), True
-        )
-        points = approx.reshape(-1, 2)
-        if len(points) < 3:
-            return None
-
-        xx = int(stats[label_id, cv2.CC_STAT_LEFT])
-        yy = int(stats[label_id, cv2.CC_STAT_TOP])
-        ww = int(stats[label_id, cv2.CC_STAT_WIDTH])
-        hh = int(stats[label_id, cv2.CC_STAT_HEIGHT])
-        cx, cy = centroids[label_id]
-
-        return {
-            "mask": mask,
-            "area": area,
-            "bbox": [xx, yy, ww, hh],
-            "centroid": [float(cx), float(cy)],
-            "points": points.tolist(),
-        }
-
-    def _color_component_at(self, x, y):
-        """Fallback: recover the clicked connected palette-color island."""
-        if self.color_bgr is None or not self.palette:
-            return None
-
-        color_map = self._palette_label_map_full_image()
-        if color_map is None:
-            return None
-
-        h, w = color_map.shape
-        if not (0 <= x < w and 0 <= y < h):
-            return None
-
-        color_id = int(color_map[y, x])
-        if color_id <= 0:
-            return None
-
-        mask = (color_map == color_id).astype(np.uint8)
-
-        hsv = cv2.cvtColor(self.color_bgr, cv2.COLOR_BGR2HSV)
-        if self.ignore_dark_var.get():
-            mask[hsv[:, :, 2] <= int(self.dark_threshold_var.get())] = 0
-
-        _count, labels, stats, centroids = cv2.connectedComponentsWithStats(
-            mask, connectivity=8
-        )
-
-        label_id = int(labels[y, x])
-        if label_id <= 0:
-            return None
-
-        comp_mask = labels == label_id
-        area = int(stats[label_id, cv2.CC_STAT_AREA])
-
-        contour_img = comp_mask.astype(np.uint8) * 255
-        contours, _ = cv2.findContours(
-            contour_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-        if not contours:
-            return None
-
-        contour = max(contours, key=cv2.contourArea)
-        approx = cv2.approxPolyDP(
-            contour, float(self.simplify_var.get()), True
-        )
-        points = approx.reshape(-1, 2)
-        if len(points) < 3:
-            return None
-
-        xx = int(stats[label_id, cv2.CC_STAT_LEFT])
-        yy = int(stats[label_id, cv2.CC_STAT_TOP])
-        ww = int(stats[label_id, cv2.CC_STAT_WIDTH])
-        hh = int(stats[label_id, cv2.CC_STAT_HEIGHT])
-        cx, cy = centroids[label_id]
-
-        return {
-            "mask": comp_mask,
-            "area": area,
-            "bbox": [xx, yy, ww, hh],
-            "centroid": [float(cx), float(cy)],
-            "points": points.tolist(),
-            "suggested_color_id": color_id,
-        }
-
-    def _find_existing_region_covering_point(self, x, y):
-        candidates = []
-
-        for region in self.regions:
-            if not region.get("active", True):
-                continue
-            mask = self._region_mask(region)
-            if mask is not None and bool(mask[y, x]):
-                candidates.append(region)
-
-        if not candidates:
-            return None
-
-        return sorted(
-            candidates,
-            key=lambda r: (
-                -int(r.get("priority", 0)),
-                int(r.get("area", 0)),
-            ),
-        )[0]
-
-    def add_missing_region_at(self, x, y):
-        """
-        Click once:
-        - existing tiny region -> force a visible color number
-        - otherwise add raw outline component
-        - fallback to colored-reference island
-        - derive target color automatically
-        """
-        if self.labels is None:
-            return
-
-        existing = self._find_existing_region_covering_point(x, y)
-
-        if existing is not None:
-            existing["force_label"] = True
-
-            if self.color_bgr is not None:
-                color = self._extract_color_for_region(existing)
-                if color is not None:
-                    existing["target_color"] = color
-                    if self.palette:
-                        existing["suggested_color_id"] = self._nearest_palette_id(color)
-
-            self.selected_region_ids = {existing["id"]}
-            self._update_counts()
-            self.refresh_preview()
-
-            self.status_var.set(
-                f"Region {existing['id']} übernommen. "
-                f"Farb-ID {existing.get('suggested_color_id') or 'noch nicht bestimmt'}."
-            )
-            return
-
-        component = self._raw_component_at(x, y)
-        source = "Outline"
-
-        if component is None:
-            component = self._color_component_at(x, y)
-            source = "Farbvorlage"
-
-        if component is None:
-            self.status_var.set(
-                "An dieser Stelle konnte keine geeignete Fläche ermittelt werden."
-            )
-            return
-
-        next_id = max([r["id"] for r in self.regions], default=0) + 1
-
-        new_region = {
-            "id": next_id,
-            "source_label": None,
-            "area": int(component["area"]),
-            "bbox": component["bbox"],
-            "centroid": component["centroid"],
-            "points": component["points"],
-            "active": True,
-            "target_color": None,
-            "suggested_color_id": component.get("suggested_color_id"),
-            "parent_id": None,
-            "is_overlay": False,
-            "is_micro": True,
-            "is_recovered": source == "Farbvorlage",
-            "is_manual": True,
-            "force_label": True,
-            "priority": 3,
-            "mask": component["mask"].copy(),
-        }
-
-        if self.color_bgr is not None:
-            color = self._representative_color(
-                self.color_bgr[new_region["mask"]]
-            )
-            if color is not None:
-                new_region["target_color"] = color
-                if self.palette:
-                    new_region["suggested_color_id"] = self._nearest_palette_id(color)
-
-        self.regions.append(new_region)
-        self.selected_region_ids = {next_id}
-
-        self._update_counts()
-        self.refresh_preview()
-
-        self.status_var.set(
-            f"Manuelle Region {next_id} aus {source} hinzugefügt, "
-            f"{new_region['area']} px, "
-            f"Farb-ID {new_region.get('suggested_color_id') or 'noch nicht bestimmt'}."
         )
 
     # ------------------------------------------------------------------
@@ -2606,10 +2253,6 @@ class ColoringRegionExtractor(tk.Tk):
         h, w = self.labels.shape
 
         if not (0 <= x < w and 0 <= y < h):
-            return
-
-        if self.mode_var.get() == "manual_add":
-            self.add_missing_region_at(x, y)
             return
 
         if self.mode_var.get() == "label":
@@ -3232,7 +2875,6 @@ class ColoringRegionExtractor(tk.Tk):
             if not (
                 saved.get("is_overlay", False)
                 or saved.get("is_recovered", False)
-                or saved.get("is_manual", False)
             ):
                 continue
 
@@ -3262,8 +2904,6 @@ class ColoringRegionExtractor(tk.Tk):
                 "is_overlay": bool(saved.get("is_overlay", True)),
                 "is_micro": bool(saved.get("is_micro", False)),
                 "is_recovered": bool(saved.get("is_recovered", False)),
-                "is_manual": bool(saved.get("is_manual", False)),
-                "force_label": bool(saved.get("force_label", False)),
                 "priority": int(saved.get("priority", 1)),
                 "mask": mask.astype(bool),
             })
@@ -3365,8 +3005,6 @@ class ColoringRegionExtractor(tk.Tk):
                     "is_overlay": bool(region.get("is_overlay", False)),
                     "is_micro": bool(region.get("is_micro", False)),
                     "is_recovered": bool(region.get("is_recovered", False)),
-                    "is_manual": bool(region.get("is_manual", False)),
-                    "force_label": bool(region.get("force_label", False)),
                     "priority": int(region.get("priority", 0)),
                 }
                 for region in self.regions
@@ -3488,8 +3126,6 @@ class ColoringRegionExtractor(tk.Tk):
                         f'data-region-id="{region["id"]}" '
                         f'data-priority="{int(region.get("priority", 0))}" '
                         f'data-recovered="{1 if region.get("is_recovered", False) else 0}" '
-                    f'data-manual="{1 if region.get("is_manual", False) else 0}" '
-                        f'data-manual="{1 if region.get("is_manual", False) else 0}" '
                         f'data-parent-id="{region.get("parent_id") if region.get("parent_id") is not None else ""}" '
                         f'd="{d}" fill="{color_hex}" stroke="none"/>'
                     )
@@ -3539,7 +3175,6 @@ class ColoringRegionExtractor(tk.Tk):
                     f'data-region-id="{region["id"]}" '
                     f'data-priority="{int(region.get("priority", 0))}" '
                     f'data-recovered="{1 if region.get("is_recovered", False) else 0}" '
-                    f'data-manual="{1 if region.get("is_manual", False) else 0}" '
                     f'data-parent-id="{region.get("parent_id") if region.get("parent_id") is not None else ""}" '
                     f'd="{d}" fill="{color_hex}" stroke="none"/>'
                 )
@@ -3650,8 +3285,6 @@ class ColoringRegionExtractor(tk.Tk):
                     "is_overlay": bool(region.get("is_overlay", False)),
                     "is_micro": bool(region.get("is_micro", False)),
                     "is_recovered": bool(region.get("is_recovered", False)),
-                    "is_manual": bool(region.get("is_manual", False)),
-                    "force_label": bool(region.get("force_label", False)),
                     "priority": int(region.get("priority", 0)),
                 }
                 for region in self.regions

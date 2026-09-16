@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Coloring Region Extractor v10
+Coloring Region Extractor v9
 
 Features:
 - Automatic closed-region detection
@@ -21,7 +21,7 @@ Requirements:
     pip install opencv-python pillow numpy
 
 Run:
-    python3 coloring_region_extractor_gui_v10.py
+    python3 coloring_region_extractor_gui_v9.py
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ class ColoringRegionExtractor(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("Coloring Region Extractor v10")
+        self.title("Coloring Region Extractor v9")
         self.geometry("1720x980")
         self.minsize(1050, 700)
         self.resizable(True, True)
@@ -86,11 +86,6 @@ class ColoringRegionExtractor(tk.Tk):
         self.display_scale = 1.0
         self.display_offset_x = 0
         self.display_offset_y = 0
-        self.zoom_factor = 1.0
-        self.pan_x = 0.0
-        self.pan_y = 0.0
-        self._pan_start = None
-        self._pan_origin = None
 
         # Region parameters
         self.threshold_var = tk.IntVar(value=190)
@@ -129,12 +124,10 @@ class ColoringRegionExtractor(tk.Tk):
         paned.pack(fill="both", expand=True)
 
         left_holder = ttk.Frame(paned)
-        preview_holder = ttk.Frame(paned)
-        right_holder = ttk.Frame(paned)
+        right = ttk.Frame(paned)
 
         paned.add(left_holder, weight=0)
-        paned.add(preview_holder, weight=1)
-        paned.add(right_holder, weight=0)
+        paned.add(right, weight=1)
 
         # Scrollable left control panel.
         self.left_canvas = tk.Canvas(
@@ -494,37 +487,14 @@ class ColoringRegionExtractor(tk.Tk):
 
         ttk.Separator(left).pack(fill="x", pady=10)
 
-        # Scrollable right control panel.
-        self.right_canvas = tk.Canvas(
-            right_holder, width=400, highlightthickness=0, borderwidth=0
-        )
-        right_scroll = ttk.Scrollbar(
-            right_holder, orient="vertical", command=self.right_canvas.yview
-        )
-        self.right_canvas.configure(yscrollcommand=right_scroll.set)
-        right_scroll.pack(side="right", fill="y")
-        self.right_canvas.pack(side="left", fill="both", expand=True)
-        controls_right = ttk.Frame(self.right_canvas, padding=12)
-        self.right_window = self.right_canvas.create_window(
-            (0, 0), window=controls_right, anchor="nw"
-        )
-        controls_right.bind(
-            "<Configure>",
-            lambda _e: self.right_canvas.configure(scrollregion=self.right_canvas.bbox("all")),
-        )
-        self.right_canvas.bind(
-            "<Configure>",
-            lambda e: self.right_canvas.itemconfigure(self.right_window, width=e.width),
-        )
-
         # Selection
         ttk.Label(
-            controls_right,
+            left,
             text="Auswahl und Game Areas",
             font=("Helvetica", 13, "bold"),
         ).pack(anchor="w")
 
-        modes = ttk.Frame(controls_right)
+        modes = ttk.Frame(left)
         modes.pack(fill="x", pady=(4, 6))
 
         ttk.Radiobutton(
@@ -549,7 +519,7 @@ class ColoringRegionExtractor(tk.Tk):
         ).pack(side="left", padx=(12, 0))
 
         ttk.Label(
-            controls_right,
+            left,
             text=(
                 "Klick: eine Region auswählen\n"
                 "Shift + Klick: Auswahl erweitern/entfernen\n"
@@ -560,12 +530,12 @@ class ColoringRegionExtractor(tk.Tk):
         ).pack(anchor="w", pady=(0, 7))
 
         ttk.Button(
-            controls_right,
+            left,
             text="Auswahl löschen",
             command=self.clear_selection,
         ).pack(fill="x", pady=2)
 
-        row = ttk.Frame(controls_right)
+        row = ttk.Frame(left)
         row.pack(fill="x", pady=(7, 2))
 
         ttk.Label(row, text="Gruppenname").pack(side="left")
@@ -574,7 +544,7 @@ class ColoringRegionExtractor(tk.Tk):
             textvariable=self.group_name_var,
         ).pack(side="right", fill="x", expand=True, padx=(10, 0))
 
-        row = ttk.Frame(controls_right)
+        row = ttk.Frame(left)
         row.pack(fill="x", pady=2)
 
         ttk.Label(row, text="Farb-ID").pack(side="left")
@@ -587,26 +557,26 @@ class ColoringRegionExtractor(tk.Tk):
         ).pack(side="right")
 
         ttk.Button(
-            controls_right,
+            left,
             text="Gruppe aus Auswahl erstellen",
             command=self.create_group,
         ).pack(fill="x", pady=(6, 2))
 
         ttk.Button(
-            controls_right,
+            left,
             text="Auswahl zur gewählten Gruppe",
             command=self.add_selection_to_group,
         ).pack(fill="x", pady=2)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Auswahl aus Gruppen entfernen",
             command=self.remove_selection_from_groups,
         ).pack(fill="x", pady=2)
 
         ttk.Label(left, text="Gruppen").pack(anchor="w", pady=(8, 3))
 
-        list_frame = ttk.Frame(controls_right)
+        list_frame = ttk.Frame(left)
         list_frame.pack(fill="both")
 
         self.group_list = tk.Listbox(
@@ -626,184 +596,118 @@ class ColoringRegionExtractor(tk.Tk):
         self.group_list.bind("<<ListboxSelect>>", self.on_group_selected)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Gewählte Gruppe aktualisieren",
             command=self.update_selected_group,
         ).pack(fill="x", pady=(5, 2))
 
         ttk.Button(
-            controls_right,
+            left,
             text="Farbe der Gruppe aus Vorlage neu bestimmen",
             command=self.analyze_selected_group_color,
         ).pack(fill="x", pady=2)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Label automatisch zentrieren",
             command=self.auto_center_group_label,
         ).pack(fill="x", pady=2)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Gewählte Gruppe löschen",
             command=self.delete_selected_group,
         ).pack(fill="x", pady=2)
 
-        ttk.Separator(controls_right).pack(fill="x", pady=10)
+        ttk.Separator(left).pack(fill="x", pady=10)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Auswahl aktivieren",
             command=lambda: self.set_selection_active(True),
         ).pack(fill="x", pady=2)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Auswahl deaktivieren",
             command=lambda: self.set_selection_active(False),
         ).pack(fill="x", pady=2)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Alle aktivieren",
             command=self.activate_all,
         ).pack(fill="x", pady=2)
 
-        ttk.Separator(controls_right).pack(fill="x", pady=10)
+        ttk.Separator(left).pack(fill="x", pady=10)
 
         ttk.Label(
-            controls_right,
+            left,
             text="Export",
             font=("Helvetica", 13, "bold"),
         ).pack(anchor="w")
 
         ttk.Button(
-            controls_right,
+            left,
             text="Game SVG exportieren",
             command=self.export_svg,
         ).pack(fill="x", pady=(5, 2))
 
         ttk.Button(
-            controls_right,
+            left,
             text="Game JSON exportieren",
             command=self.export_game_json,
         ).pack(fill="x", pady=2)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Outline PNG exportieren",
             command=self.export_outline_png,
         ).pack(fill="x", pady=2)
 
         ttk.Button(
-            controls_right,
+            left,
             text="Vorschau speichern",
             command=self.export_preview,
         ).pack(fill="x", pady=2)
 
         ttk.Label(
-            controls_right,
+            left,
             textvariable=self.status_var,
             wraplength=390,
             justify="left",
         ).pack(anchor="w", pady=(12, 20))
 
-        # Center image preview with zoom controls
-        preview_toolbar = ttk.Frame(preview_holder)
-        preview_toolbar.pack(fill="x", padx=6, pady=6)
-        ttk.Button(preview_toolbar, text="−", width=3, command=lambda: self._zoom_by(1/1.2)).pack(side="left")
-        ttk.Button(preview_toolbar, text="+", width=3, command=lambda: self._zoom_by(1.2)).pack(side="left", padx=(4, 0))
-        ttk.Button(preview_toolbar, text="Ganzes Bild", command=self.reset_zoom).pack(side="left", padx=(8, 0))
-        self.zoom_text_var = tk.StringVar(value="Fit")
-        ttk.Label(preview_toolbar, textvariable=self.zoom_text_var).pack(side="left", padx=10)
-        ttk.Label(preview_toolbar, text="Magic Mouse: scrollen = Zoom · Rechtsklick ziehen = Verschieben").pack(side="right")
-
+        # Right image preview
         self.canvas = tk.Canvas(
-            preview_holder,
+            right,
             bg="#292929",
             highlightthickness=0,
             cursor="hand2",
         )
         self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Button-1>", self.on_canvas_click)
-        self.canvas.bind("<MouseWheel>", self._on_preview_wheel)
-        self.canvas.bind("<Button-4>", lambda e: self._zoom_at(e.x, e.y, 1.12))
-        self.canvas.bind("<Button-5>", lambda e: self._zoom_at(e.x, e.y, 1/1.12))
-        self.canvas.bind("<ButtonPress-2>", self._start_pan)
-        self.canvas.bind("<B2-Motion>", self._do_pan)
-        self.canvas.bind("<ButtonPress-3>", self._start_pan)
-        self.canvas.bind("<B3-Motion>", self._do_pan)
         self.canvas.bind("<Configure>", lambda _e: self.refresh_preview())
 
         self.after(200, lambda: self._set_initial_sash(paned))
 
     def _set_initial_sash(self, paned):
         try:
-            paned.sashpos(0, 420)
-            paned.sashpos(1, max(850, self.winfo_width() - 410))
+            paned.sashpos(0, 440)
         except Exception:
             pass
 
     def _on_mousewheel(self, event):
-        # Scroll whichever sidebar is under the pointer. macOS trackpads and
-        # Magic Mouse often report small delta values, so use direction only.
+        # Only scroll left panel if pointer is over it.
         try:
             widget = self.winfo_containing(event.x_root, event.y_root)
-            target = None
             while widget:
                 if widget == self.left_canvas:
-                    target = self.left_canvas
-                    break
-                if hasattr(self, "right_canvas") and widget == self.right_canvas:
-                    target = self.right_canvas
-                    break
+                    self.left_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                    return
                 widget = widget.master
-            if target is not None and event.delta:
-                target.yview_scroll(-1 if event.delta > 0 else 1, "units")
         except Exception:
             pass
-
-    def reset_zoom(self):
-        self.zoom_factor = 1.0
-        self.pan_x = 0.0
-        self.pan_y = 0.0
-        self.refresh_preview()
-
-    def _zoom_by(self, factor):
-        self._zoom_at(self.canvas.winfo_width()/2, self.canvas.winfo_height()/2, factor)
-
-    def _on_preview_wheel(self, event):
-        if not event.delta:
-            return
-        # Smooth enough for Magic Mouse/trackpad, while avoiding huge jumps.
-        magnitude = min(3.0, max(0.35, abs(event.delta) / 120.0))
-        factor = 1.10 ** magnitude
-        if event.delta < 0:
-            factor = 1.0 / factor
-        self._zoom_at(event.x, event.y, factor)
-        return "break"
-
-    def _zoom_at(self, canvas_x, canvas_y, factor):
-        old_scale = max(1e-9, self.display_scale)
-        image_x = (canvas_x - self.display_offset_x) / old_scale
-        image_y = (canvas_y - self.display_offset_y) / old_scale
-        self.zoom_factor = min(12.0, max(1.0, self.zoom_factor * factor))
-        self.refresh_preview()
-        new_scale = max(1e-9, self.display_scale)
-        self.pan_x += canvas_x - (self.display_offset_x + image_x * new_scale)
-        self.pan_y += canvas_y - (self.display_offset_y + image_y * new_scale)
-        self.refresh_preview()
-
-    def _start_pan(self, event):
-        self._pan_start = (event.x, event.y)
-        self._pan_origin = (self.pan_x, self.pan_y)
-
-    def _do_pan(self, event):
-        if not self._pan_start or not self._pan_origin:
-            return
-        self.pan_x = self._pan_origin[0] + event.x - self._pan_start[0]
-        self.pan_y = self._pan_origin[1] + event.y - self._pan_start[1]
-        self.refresh_preview()
 
     def _add_slider(self, parent, label, variable, minimum, maximum, is_float=False):
         frame = ttk.Frame(parent)
@@ -2324,10 +2228,13 @@ class ColoringRegionExtractor(tk.Tk):
 
         h, w = preview.shape[:2]
 
-        # Base scale always fits the complete artwork into the available
-        # preview height/width. zoom_factor is relative to that fitted view.
-        fit_scale = max(0.01, min(canvas_w / w, canvas_h / h))
-        scale = fit_scale * self.zoom_factor
+        scale = max(
+            0.01,
+            min(
+                canvas_w / w,
+                canvas_h / h,
+            ),
+        )
 
         display_w = max(1, int(w * scale))
         display_h = max(1, int(h * scale))
@@ -2340,10 +2247,8 @@ class ColoringRegionExtractor(tk.Tk):
         self.preview_photo = ImageTk.PhotoImage(pil)
 
         self.display_scale = scale
-        self.display_offset_x = (canvas_w - display_w) // 2 + int(self.pan_x)
-        self.display_offset_y = (canvas_h - display_h) // 2 + int(self.pan_y)
-        if hasattr(self, "zoom_text_var"):
-            self.zoom_text_var.set("Fit" if abs(self.zoom_factor - 1.0) < 0.001 else f"{self.zoom_factor * 100:.0f}%")
+        self.display_offset_x = (canvas_w - display_w) // 2
+        self.display_offset_y = (canvas_h - display_h) // 2
 
         self.canvas.delete("all")
         self.canvas.create_image(
