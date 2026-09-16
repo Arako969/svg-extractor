@@ -110,6 +110,11 @@ class ColoringRegionExtractor(tk.Tk):
 
         # Text
         self.status_var = tk.StringVar(value="Bitte ein Outline-Bild öffnen.")
+        self.outline_points_before_var = tk.StringVar(value="Outline-Punkte vorher: -")
+        self.outline_points_after_var = tk.StringVar(value="Outline-Punkte nachher: -")
+        self.outline_reduction_var = tk.StringVar(value="Reduktion: -")
+        self.svg_outline_tolerance_var = tk.DoubleVar(value=0.60)
+        self.outline_tolerance_display_var = tk.StringVar(value="Toleranz beim letzten Export: -")
         self.color_file_var = tk.StringVar(value="Keine Farbvorlage geladen")
         self.region_count_var = tk.StringVar(value="Regionen: 0")
         self.active_count_var = tk.StringVar(value="Aktiv: 0")
@@ -677,6 +682,63 @@ class ColoringRegionExtractor(tk.Tk):
             font=("Helvetica", 13, "bold"),
         ).pack(anchor="w")
 
+
+        ttk.Label(
+            controls_right,
+            text="SVG-Outline Vereinfachung",
+            font=("Helvetica", 11, "bold"),
+        ).pack(anchor="w", pady=(4, 0))
+
+        ttk.Label(
+            controls_right,
+            text=(
+                "Max. Abweichung der vereinfachten Kontur. "
+                "Einstellung in 0,05-px-Schritten. "
+                "Kleinere Werte = mehr Ankerpunkte und höhere Formtreue. "
+                "Größere Werte = weniger Ankerpunkte und kleinere SVG-Dateien."
+            ),
+            wraplength=330,
+            justify="left",
+        ).pack(anchor="w", pady=(2, 2))
+
+        self._add_slider(
+            controls_right,
+            "Pixel-Toleranz",
+            self.svg_outline_tolerance_var,
+            0.20,
+            1.20,
+            is_float=True,
+            step=0.05,
+            decimals=2,
+        )
+
+        outline_stats_frame = ttk.LabelFrame(
+            controls_right,
+            text="SVG-Outline-Optimierung",
+            padding=8,
+        )
+        outline_stats_frame.pack(fill="x", pady=(6, 8))
+
+        ttk.Label(
+            outline_stats_frame,
+            textvariable=self.outline_points_before_var,
+        ).pack(anchor="w")
+
+        ttk.Label(
+            outline_stats_frame,
+            textvariable=self.outline_points_after_var,
+        ).pack(anchor="w")
+
+        ttk.Label(
+            outline_stats_frame,
+            textvariable=self.outline_reduction_var,
+        ).pack(anchor="w")
+
+        ttk.Label(
+            outline_stats_frame,
+            textvariable=self.outline_tolerance_display_var,
+        ).pack(anchor="w")
+
         ttk.Button(
             controls_right,
             text="Game SVG exportieren",
@@ -805,7 +867,17 @@ class ColoringRegionExtractor(tk.Tk):
         self.pan_y = self._pan_origin[1] + event.y - self._pan_start[1]
         self.refresh_preview()
 
-    def _add_slider(self, parent, label, variable, minimum, maximum, is_float=False):
+    def _add_slider(
+        self,
+        parent,
+        label,
+        variable,
+        minimum,
+        maximum,
+        is_float=False,
+        step=None,
+        decimals=None,
+    ):
         frame = ttk.Frame(parent)
         frame.pack(fill="x", pady=4)
 
@@ -824,17 +896,51 @@ class ColoringRegionExtractor(tk.Tk):
             orient="horizontal",
         ).pack(fill="x")
 
+        updating = {"active": False}
+
         def update(*_):
+            if updating["active"]:
+                return
+
             if is_float:
-                value_label.configure(text=f"{float(variable.get()):.1f}")
+                value = float(variable.get())
+
+                if step is not None and step > 0:
+                    snapped = round(
+                        (value - minimum) / step
+                    ) * step + minimum
+
+                    snapped = max(
+                        float(minimum),
+                        min(float(maximum), snapped),
+                    )
+
+                    # Avoid endless trace recursion caused by float noise.
+                    if abs(snapped - value) > 1e-9:
+                        updating["active"] = True
+                        variable.set(snapped)
+                        updating["active"] = False
+                        value = snapped
+
+                digits = (
+                    1
+                    if decimals is None
+                    else int(decimals)
+                )
+
+                value_label.configure(
+                    text=f"{value:.{digits}f}"
+                )
             else:
                 val = int(round(variable.get()))
+
                 if variable is self.close_size_var:
                     if val < 1:
                         val = 1
                     if val % 2 == 0:
                         val += 1
                     variable.set(val)
+
                 value_label.configure(text=str(val))
 
         variable.trace_add("write", update)
@@ -3128,6 +3234,9 @@ class ColoringRegionExtractor(tk.Tk):
         self.include_border_var.set(
             params.get("include_border_regions", True)
         )
+        self.svg_outline_tolerance_var.set(
+            params.get("svg_outline_tolerance", 0.60)
+        )
         self.adaptive_micro_var.set(
             params.get("adaptive_micro", True)
         )
@@ -3333,6 +3442,7 @@ class ColoringRegionExtractor(tk.Tk):
                 "min_area": int(self.min_area_var.get()),
                 "simplify_epsilon": float(self.simplify_var.get()),
                 "include_border_regions": bool(self.include_border_var.get()),
+                "svg_outline_tolerance": float(self.svg_outline_tolerance_var.get()),
                 "adaptive_micro": bool(self.adaptive_micro_var.get()),
                 "micro_min_area": int(self.micro_min_area_var.get()),
             },
@@ -3383,6 +3493,577 @@ class ColoringRegionExtractor(tk.Tk):
                 for _, group in sorted(self.groups.items())
             ],
         }
+
+    # ------------------------------------------------------------------
+    # SVG outline vectorization
+    # ------------------------------------------------------------------
+
+    def _closed_catmull_rom_svg_path(self, points, tension=0.92):
+        """
+        Convert a closed polygon into a smooth cubic Bezier SVG subpath.
+
+        Catmull-Rom style control points preserve the overall contour while
+        replacing the many short raster-derived line segments with continuous
+        curves. `tension` below 1.0 slightly reduces overshoot on tight details.
+        """
+        pts = np.asarray(points, dtype=np.float64)
+
+        if len(pts) < 3:
+            return ""
+
+        cleaned = [pts[0]]
+        for point in pts[1:]:
+            if np.linalg.norm(point - cleaned[-1]) > 1e-6:
+                cleaned.append(point)
+
+        pts = np.asarray(cleaned, dtype=np.float64)
+        n = len(pts)
+
+        if n < 3:
+            return ""
+
+        parts = [f"M {pts[0][0]:.2f},{pts[0][1]:.2f}"]
+        factor = float(tension) / 6.0
+
+        for i in range(n):
+            p0 = pts[(i - 1) % n]
+            p1 = pts[i]
+            p2 = pts[(i + 1) % n]
+            p3 = pts[(i + 2) % n]
+
+            c1 = p1 + (p2 - p0) * factor
+            c2 = p2 - (p3 - p1) * factor
+
+            parts.append(
+                "C "
+                f"{c1[0]:.2f},{c1[1]:.2f} "
+                f"{c2[0]:.2f},{c2[1]:.2f} "
+                f"{p2[0]:.2f},{p2[1]:.2f}"
+            )
+
+        parts.append("Z")
+        return " ".join(parts)
+
+    def _resample_closed_contour(self, points, spacing=3.2):
+        """
+        Resample a closed contour at nearly uniform arc-length spacing.
+
+        Uniform sampling prevents raster-derived point clusters from producing
+        visible waviness in the final Bezier curve.
+        """
+        pts = np.asarray(points, dtype=np.float64)
+
+        if len(pts) < 3:
+            return pts
+
+        cleaned = [pts[0]]
+        for p in pts[1:]:
+            if np.linalg.norm(p - cleaned[-1]) > 1e-6:
+                cleaned.append(p)
+
+        pts = np.asarray(cleaned, dtype=np.float64)
+
+        if len(pts) < 3:
+            return pts
+
+        closed = np.vstack([pts, pts[0]])
+        seg = np.linalg.norm(np.diff(closed, axis=0), axis=1)
+        total = float(seg.sum())
+
+        if total <= 0.0:
+            return pts
+
+        count = max(
+            8,
+            int(round(total / max(1.0, float(spacing)))),
+        )
+
+        targets = np.linspace(
+            0.0,
+            total,
+            count,
+            endpoint=False,
+        )
+
+        cumulative = np.concatenate(
+            [[0.0], np.cumsum(seg)]
+        )
+
+        result = []
+        j = 0
+
+        for t in targets:
+            while (
+                j < len(seg) - 1
+                and cumulative[j + 1] < t
+            ):
+                j += 1
+
+            length = seg[j]
+
+            if length <= 1e-9:
+                result.append(closed[j].copy())
+                continue
+
+            local = (
+                (t - cumulative[j])
+                / length
+            )
+
+            p = (
+                closed[j] * (1.0 - local)
+                + closed[j + 1] * local
+            )
+
+            result.append(p)
+
+        return np.asarray(
+            result,
+            dtype=np.float64,
+        )
+
+    def _smooth_closed_contour(self, points, passes=3):
+        """
+        Apply a gentle periodic low-pass filter to a closed contour.
+
+        Catmull-Rom interpolation passes through every supplied point. If those
+        points still contain tiny raster fluctuations, the SVG curve reproduces
+        them. This filter removes those sub-pixel bumps before Bezier fitting.
+
+        The 1-4-6-4-1 kernel is deliberately conservative and is applied
+        cyclically, so there is no seam at the first/last point.
+        """
+        pts = np.asarray(
+            points,
+            dtype=np.float64,
+        )
+
+        if len(pts) < 5:
+            return pts
+
+        weights = np.array(
+            [1.0, 4.0, 6.0, 4.0, 1.0],
+            dtype=np.float64,
+        )
+        weights /= weights.sum()
+
+        out = pts.copy()
+
+        for _ in range(max(0, int(passes))):
+            smoothed = np.zeros_like(out)
+
+            for offset, weight in zip(
+                (-2, -1, 0, 1, 2),
+                weights,
+            ):
+                smoothed += (
+                    np.roll(out, offset, axis=0)
+                    * weight
+                )
+
+            out = smoothed
+
+        return out
+
+    def _curvature_scores(self, points):
+        """Return local turning-angle scores for a closed contour."""
+        pts = np.asarray(points, dtype=np.float64)
+        n = len(pts)
+
+        if n < 3:
+            return np.zeros(n, dtype=np.float64)
+
+        prev_pts = np.roll(pts, 1, axis=0)
+        next_pts = np.roll(pts, -1, axis=0)
+
+        incoming = pts - prev_pts
+        outgoing = next_pts - pts
+
+        len_in = np.linalg.norm(incoming, axis=1)
+        len_out = np.linalg.norm(outgoing, axis=1)
+
+        denom = np.maximum(len_in * len_out, 1e-9)
+        cosang = np.sum(incoming * outgoing, axis=1) / denom
+        cosang = np.clip(cosang, -1.0, 1.0)
+
+        return np.arccos(cosang)
+
+    def _point_segment_distance(self, p, a, b):
+        """Distance from point p to line segment a-b."""
+        p = np.asarray(p, dtype=np.float64)
+        a = np.asarray(a, dtype=np.float64)
+        b = np.asarray(b, dtype=np.float64)
+
+        ab = b - a
+        denom = float(np.dot(ab, ab))
+
+        if denom <= 1e-12:
+            return float(np.linalg.norm(p - a))
+
+        t = float(np.dot(p - a, ab) / denom)
+        t = max(0.0, min(1.0, t))
+        projection = a + t * ab
+
+        return float(np.linalg.norm(p - projection))
+
+    def _worst_ring_segment_error(self, points, start_idx, end_idx):
+        """Return max error and worst point index between two retained anchors."""
+        pts = np.asarray(points, dtype=np.float64)
+        n = len(pts)
+
+        if n < 3 or start_idx == end_idx:
+            return 0.0, None
+
+        a = pts[start_idx]
+        b = pts[end_idx]
+
+        i = (start_idx + 1) % n
+        max_error = 0.0
+        worst_idx = None
+
+        while i != end_idx:
+            error = self._point_segment_distance(
+                pts[i],
+                a,
+                b,
+            )
+
+            if error > max_error:
+                max_error = error
+                worst_idx = i
+
+            i = (i + 1) % n
+
+        return max_error, worst_idx
+
+    def _simplify_smooth_closed_contour(
+        self,
+        points,
+        tolerance=0.50,
+        curvature_keep=0.14,
+        min_points=10,
+    ):
+        """
+        Curvature-aware simplification of an already smoothed closed contour.
+
+        Long calm arcs are simplified more strongly. Areas with stronger local
+        turning retain more anchors. Every simplified segment is then validated
+        against the smoothed source contour and points are reinserted until the
+        maximum geometric deviation stays within `tolerance`.
+        """
+        pts = np.asarray(points, dtype=np.float64)
+        n = len(pts)
+
+        if n <= max(3, int(min_points)):
+            return pts
+
+        contour = pts.astype(np.float32).reshape(-1, 1, 2)
+
+        approx = cv2.approxPolyDP(
+            contour,
+            float(tolerance),
+            True,
+        )
+        approx_pts = approx.reshape(-1, 2).astype(np.float64)
+
+        keep = set()
+
+        for point in approx_pts:
+            idx = int(
+                np.argmin(
+                    np.linalg.norm(
+                        pts - point,
+                        axis=1,
+                    )
+                )
+            )
+            keep.add(idx)
+
+        curvature = self._curvature_scores(pts)
+
+        for idx, score in enumerate(curvature):
+            if score >= float(curvature_keep):
+                keep.add(idx)
+                keep.add((idx - 1) % n)
+                keep.add((idx + 1) % n)
+
+        if len(keep) < int(min_points):
+            step = max(
+                1,
+                n // int(min_points),
+            )
+            for idx in range(0, n, step):
+                keep.add(idx)
+
+        while True:
+            ordered = sorted(keep)
+            inserted = False
+
+            for pos, start_idx in enumerate(ordered):
+                end_idx = ordered[
+                    (pos + 1) % len(ordered)
+                ]
+
+                error, worst_idx = self._worst_ring_segment_error(
+                    pts,
+                    start_idx,
+                    end_idx,
+                )
+
+                if (
+                    error > float(tolerance)
+                    and worst_idx is not None
+                ):
+                    keep.add(int(worst_idx))
+                    inserted = True
+                    break
+
+            if not inserted:
+                break
+
+        return pts[sorted(keep)]
+
+    def _outline_svg_path_data(self):
+        """
+        Export a smooth and adaptively simplified vector outline.
+
+        Pipeline:
+        1. Upscale the original binary line mask 8x.
+        2. Build and symmetrically smooth a signed-distance field.
+        3. Trace the smooth zero-level silhouette.
+        4. Uniformly resample each contour.
+        5. Apply cyclic low-pass smoothing.
+        6. Adaptively simplify the smoothed contour with a sub-pixel tolerance.
+        7. Export the reduced contour as cubic Bezier curves.
+
+        The simplification happens only after smoothing. This keeps the visual
+        result smooth while greatly reducing redundant SVG anchor points.
+
+        Game-area masks, interaction geometry and JSON remain unchanged.
+        """
+        if self.line_mask is None:
+            return ""
+
+        scale = 8
+
+        mask = (
+            self.line_mask > 0
+        ).astype(np.uint8)
+
+        hi = cv2.resize(
+            mask,
+            None,
+            fx=scale,
+            fy=scale,
+            interpolation=cv2.INTER_NEAREST,
+        )
+
+        inside = cv2.distanceTransform(
+            hi,
+            cv2.DIST_L2,
+            5,
+        )
+
+        outside = cv2.distanceTransform(
+            1 - hi,
+            cv2.DIST_L2,
+            5,
+        )
+
+        signed = inside - outside
+
+        signed = cv2.GaussianBlur(
+            signed,
+            (0, 0),
+            sigmaX=4.0,
+            sigmaY=4.0,
+        )
+
+        smooth_mask = (
+            signed >= 0.0
+        ).astype(np.uint8) * 255
+
+        contours, _hierarchy = cv2.findContours(
+            smooth_mask,
+            cv2.RETR_TREE,
+            cv2.CHAIN_APPROX_NONE,
+        )
+
+        if not contours:
+            self._last_outline_stats = {
+                "before": 0,
+                "after": 0,
+                "reduction_percent": 0.0,
+            }
+            return ""
+
+        subpaths = []
+        points_before = 0
+        points_after = 0
+
+        for contour in contours:
+            if len(contour) < 12:
+                continue
+
+            area = (
+                abs(cv2.contourArea(contour))
+                / float(scale * scale)
+            )
+
+            if area < 1.0:
+                continue
+
+            points = (
+                contour.reshape(-1, 2)
+                .astype(np.float64)
+                / float(scale)
+            )
+
+            points = self._resample_closed_contour(
+                points,
+                spacing=3.4,
+            )
+
+            if len(points) < 5:
+                continue
+
+            points = self._smooth_closed_contour(
+                points,
+                passes=3,
+            )
+
+            if len(points) < 3:
+                continue
+
+            points_before += len(points)
+
+            # Main adaptive simplification step.
+            # 0.75 px keeps the curve visually almost identical at normal and
+            # high zoom while removing many unnecessary anchor points.
+            tolerance = max(
+                0.05,
+                float(self.svg_outline_tolerance_var.get()),
+            )
+
+            simplified = self._simplify_smooth_closed_contour(
+                points,
+                tolerance=tolerance,
+                curvature_keep=0.14,
+                min_points=10,
+            )
+
+            points_after += len(simplified)
+
+            # Slightly lower tension is safer once fewer anchors remain.
+            subpath = self._closed_catmull_rom_svg_path(
+                simplified,
+                tension=0.44,
+            )
+
+            if subpath:
+                subpaths.append(subpath)
+
+        reduction = 0.0
+        if points_before > 0:
+            reduction = (
+                1.0
+                - (points_after / float(points_before))
+            ) * 100.0
+
+        self._last_outline_stats = {
+            "before": int(points_before),
+            "after": int(points_after),
+            "reduction_percent": float(reduction),
+            "tolerance": float(self.svg_outline_tolerance_var.get()),
+        }
+
+        return " ".join(subpaths)
+
+
+    def _svg_fill_points_with_outline_bleed(self, region, bleed_px=3):
+        """
+        Build visual-only SVG fill geometry with a small safety overlap.
+
+        The fill may expand only into the original black outline plus a
+        one-pixel safety halo around it. This compensates for the tiny boundary
+        movement introduced by vector smoothing and prevents white seams.
+
+        Gameplay masks, region geometry and JSON data are not changed.
+        """
+        points = region.get("points", [])
+
+        if bleed_px <= 0 or self.line_mask is None:
+            return points
+
+        mask = self._region_mask(region)
+        if mask is None:
+            return points
+
+        src = mask.astype(np.uint8) * 255
+
+        radius = max(1, int(bleed_px))
+        size = radius * 2 + 1
+        bleed_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (size, size),
+        )
+
+        expanded = cv2.dilate(
+            src,
+            bleed_kernel,
+            iterations=1,
+        ) > 0
+
+        # One-pixel safety halo around the original black line. The visible
+        # vector outline remains on top, so this extra fill is normally hidden.
+        outline_src = (self.line_mask > 0).astype(np.uint8) * 255
+        halo_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (3, 3),
+        )
+        outline_coverage = cv2.dilate(
+            outline_src,
+            halo_kernel,
+            iterations=1,
+        ) > 0
+
+        allowed = np.logical_or(
+            mask,
+            outline_coverage,
+        )
+
+        visual_mask = np.logical_and(
+            expanded,
+            allowed,
+        )
+
+        contour_img = visual_mask.astype(np.uint8) * 255
+        contours, _ = cv2.findContours(
+            contour_img,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE,
+        )
+
+        if not contours:
+            return points
+
+        contour = max(
+            contours,
+            key=cv2.contourArea,
+        )
+
+        approx = cv2.approxPolyDP(
+            contour,
+            float(self.simplify_var.get()),
+            True,
+        )
+
+        bleed_points = approx.reshape(-1, 2)
+
+        if len(bleed_points) < 3:
+            return points
+
+        return bleed_points.tolist()
 
     # ------------------------------------------------------------------
     # Export
@@ -3473,11 +4154,12 @@ class ColoringRegionExtractor(tk.Tk):
             for region in active_regions:
                 exported.add(region["id"])
 
+                svg_points = self._svg_fill_points_with_outline_bleed(region)
                 d = (
                     "M "
                     + " ".join(
                         f"{float(x):.2f},{float(y):.2f}"
-                        for x, y in region["points"]
+                        for x, y in svg_points
                     )
                     + " Z"
                 )
@@ -3488,7 +4170,6 @@ class ColoringRegionExtractor(tk.Tk):
                         f'data-region-id="{region["id"]}" '
                         f'data-priority="{int(region.get("priority", 0))}" '
                         f'data-recovered="{1 if region.get("is_recovered", False) else 0}" '
-                    f'data-manual="{1 if region.get("is_manual", False) else 0}" '
                         f'data-manual="{1 if region.get("is_manual", False) else 0}" '
                         f'data-parent-id="{region.get("parent_id") if region.get("parent_id") is not None else ""}" '
                         f'd="{d}" fill="{color_hex}" stroke="none"/>'
@@ -3502,11 +4183,12 @@ class ColoringRegionExtractor(tk.Tk):
             if not region["active"] or region["id"] in exported:
                 continue
 
+            svg_points = self._svg_fill_points_with_outline_bleed(region)
             d = (
                 "M "
                 + " ".join(
                     f"{float(x):.2f},{float(y):.2f}"
-                    for x, y in region["points"]
+                    for x, y in svg_points
                 )
                 + " Z"
             )
@@ -3547,20 +4229,67 @@ class ColoringRegionExtractor(tk.Tk):
 
             parts.append("</g>")
 
-        parts.extend(
-            [
-                "</g>",
-                "</svg>",
-            ]
-        )
+        # Close game_areas first. The outline group is intentionally written
+        # afterwards so it is rendered above all fill polygons.
+        parts.append("</g>")
+
+        outline_path = self._outline_svg_path_data()
+
+        if outline_path:
+            parts.extend(
+                [
+                    '<g id="outlines" data-role="visual-outline" pointer-events="none">',
+                    (
+                        '<path id="outline_vector" '
+                        f'd="{outline_path}" '
+                        'fill="#000000" stroke="none" fill-rule="evenodd"/>'
+                    ),
+                    "</g>",
+                ]
+            )
+
+        parts.append("</svg>")
 
         Path(path).write_text(
             "\n".join(parts),
             encoding="utf-8",
         )
 
+        stats = getattr(
+            self,
+            "_last_outline_stats",
+            None,
+        )
+
+        if stats and stats.get("before", 0) > 0:
+            self.outline_points_before_var.set(
+                f"Outline-Punkte vorher: {stats['before']}"
+            )
+            self.outline_points_after_var.set(
+                f"Outline-Punkte nachher: {stats['after']}"
+            )
+            self.outline_reduction_var.set(
+                f"Reduktion: {stats['reduction_percent']:.1f}%"
+            )
+            self.outline_tolerance_display_var.set(
+                f"Toleranz beim letzten Export: {stats.get('tolerance', float(self.svg_outline_tolerance_var.get())):.2f} px"
+            )
+        else:
+            self.outline_points_before_var.set(
+                "Outline-Punkte vorher: -"
+            )
+            self.outline_points_after_var.set(
+                "Outline-Punkte nachher: -"
+            )
+            self.outline_reduction_var.set(
+                "Reduktion: -"
+            )
+            self.outline_tolerance_display_var.set(
+                "Toleranz beim letzten Export: -"
+            )
+
         self.status_var.set(
-            f"Game SVG gespeichert: {Path(path).name}"
+            f"Game SVG mit Vektor-Outline gespeichert: {Path(path).name}"
         )
 
     def export_game_json(self):
