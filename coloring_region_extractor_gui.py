@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Coloring Region Extractor v6
+Coloring Region Extractor v7
 
 Features:
 - Automatic closed-region detection
@@ -21,7 +21,7 @@ Requirements:
     pip install opencv-python pillow numpy
 
 Run:
-    python3 coloring_region_extractor_gui_v6.py
+    python3 coloring_region_extractor_gui_v7.py
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ class ColoringRegionExtractor(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("Coloring Region Extractor v6")
+        self.title("Coloring Region Extractor v7")
         self.geometry("1720x980")
         self.minsize(1050, 700)
         self.resizable(True, True)
@@ -72,6 +72,10 @@ class ColoringRegionExtractor(tk.Tk):
         self.use_real_colors_var = tk.BooleanVar(value=True)
         self.split_min_area_var = tk.IntVar(value=180)
         self.split_smooth_var = tk.IntVar(value=3)
+        self.adaptive_micro_var = tk.BooleanVar(value=True)
+        self.micro_min_area_var = tk.IntVar(value=8)
+        self.relative_split_var = tk.BooleanVar(value=False)
+        self.split_min_percent_var = tk.DoubleVar(value=0.08)
 
         # Preview
         self.preview_photo: ImageTk.PhotoImage | None = None
@@ -249,6 +253,38 @@ class ColoringRegionExtractor(tk.Tk):
             command=self.refresh_preview,
         ).pack(anchor="w", pady=2)
 
+        ttk.Separator(left).pack(fill="x", pady=7)
+
+        ttk.Label(
+            left,
+            text="Adaptive Mikroregionen",
+            font=("Helvetica", 12, "bold"),
+        ).pack(anchor="w")
+
+        ttk.Checkbutton(
+            left,
+            text="Kleine geschlossene Flächen zusätzlich suchen",
+            variable=self.adaptive_micro_var,
+        ).pack(anchor="w", pady=2)
+
+        self._add_slider(
+            left,
+            "Min. Mikroregion",
+            self.micro_min_area_var,
+            1,
+            200,
+        )
+
+        ttk.Label(
+            left,
+            text=(
+                "Der zweite Erkennungsdurchlauf arbeitet ohne Lückenschließung. "
+                "Das hilft bei sehr kleinen Beeren-, Blüten- und Detailflächen."
+            ),
+            wraplength=390,
+            justify="left",
+        ).pack(anchor="w", pady=(2, 4))
+
         ttk.Separator(left).pack(fill="x", pady=10)
 
         stats = ttk.Frame(left)
@@ -346,6 +382,21 @@ class ColoringRegionExtractor(tk.Tk):
             self.split_min_area_var,
             20,
             3000,
+        )
+
+        ttk.Checkbutton(
+            left,
+            text="Mindestgröße relativ zur Bildfläche",
+            variable=self.relative_split_var,
+        ).pack(anchor="w", pady=(3, 1))
+
+        self._add_slider(
+            left,
+            "Relative Mindestgröße (%)",
+            self.split_min_percent_var,
+            0.005,
+            1.0,
+            is_float=True,
         )
 
         self._add_slider(
@@ -813,10 +864,90 @@ class ColoringRegionExtractor(tk.Tk):
                     "suggested_color_id": None,
                     "parent_id": None,
                     "is_overlay": False,
+                    "is_micro": False,
                     "priority": 0,
                     "mask": None,
                 }
             )
+
+        # Optional second pass for tiny closed regions. It deliberately uses
+        # the raw threshold mask without morphological closing, because closing
+        # can swallow very small interiors such as raspberry cells.
+        if self.adaptive_micro_var.get():
+            raw_line = (self.gray < threshold).astype(np.uint8) * 255
+            raw_white = cv2.bitwise_not(raw_line)
+            raw_binary = (raw_white > 0).astype(np.uint8)
+
+            raw_count, raw_labels, raw_stats, raw_centroids = cv2.connectedComponentsWithStats(
+                raw_binary,
+                connectivity=8,
+            )
+
+            micro_min = max(1, int(self.micro_min_area_var.get()))
+            existing_masks = [self.labels == r["source_label"] for r in regions]
+
+            for raw_id in range(1, raw_count):
+                area = int(raw_stats[raw_id, cv2.CC_STAT_AREA])
+                if area < micro_min or area >= min_area:
+                    continue
+
+                x = int(raw_stats[raw_id, cv2.CC_STAT_LEFT])
+                y = int(raw_stats[raw_id, cv2.CC_STAT_TOP])
+                ww = int(raw_stats[raw_id, cv2.CC_STAT_WIDTH])
+                hh = int(raw_stats[raw_id, cv2.CC_STAT_HEIGHT])
+
+                # Reject huge/thin border fragments and obvious line noise.
+                if ww <= 1 or hh <= 1:
+                    continue
+
+                raw_mask = raw_labels == raw_id
+
+                # Skip if this tiny region is already substantially represented
+                # by a main-pass region.
+                duplicate = False
+                for em in existing_masks:
+                    overlap = int(np.logical_and(raw_mask, em).sum())
+                    if overlap / max(1, area) > 0.80:
+                        duplicate = True
+                        break
+                if duplicate:
+                    continue
+
+                contour_img = raw_mask.astype(np.uint8) * 255
+                contours, _ = cv2.findContours(
+                    contour_img,
+                    cv2.RETR_EXTERNAL,
+                    cv2.CHAIN_APPROX_SIMPLE,
+                )
+                if not contours:
+                    continue
+
+                contour = max(contours, key=cv2.contourArea)
+                approx = cv2.approxPolyDP(contour, simplify, True)
+                pts = approx.reshape(-1, 2)
+                if len(pts) < 3:
+                    continue
+
+                regions.append(
+                    {
+                        "source_label": None,
+                        "area": area,
+                        "bbox": [x, y, ww, hh],
+                        "centroid": [
+                            float(raw_centroids[raw_id][0]),
+                            float(raw_centroids[raw_id][1]),
+                        ],
+                        "points": pts.tolist(),
+                        "active": True,
+                        "target_color": None,
+                        "suggested_color_id": None,
+                        "parent_id": None,
+                        "is_overlay": False,
+                        "is_micro": True,
+                        "priority": 0,
+                        "mask": raw_mask.copy(),
+                    }
+                )
 
         regions.sort(key=lambda r: r["area"], reverse=True)
 
@@ -1250,7 +1381,14 @@ class ColoringRegionExtractor(tk.Tk):
         # Delete old generated overlays for these parents before recalculating.
         self._remove_overlays_by_parent_ids(set(selected_base_ids))
 
-        min_area = max(1, int(self.split_min_area_var.get()))
+        if self.relative_split_var.get() and self.labels is not None:
+            image_area = int(self.labels.shape[0] * self.labels.shape[1])
+            min_area = max(
+                1,
+                int(image_area * float(self.split_min_percent_var.get()) / 100.0),
+            )
+        else:
+            min_area = max(1, int(self.split_min_area_var.get()))
         created = 0
 
         next_id = max([r["id"] for r in self.regions], default=0) + 1
@@ -1342,6 +1480,7 @@ class ColoringRegionExtractor(tk.Tk):
                             "suggested_color_id": color_id,
                             "parent_id": parent_id,
                             "is_overlay": True,
+                            "is_micro": False,
                             "priority": 1,
                             "mask": comp_mask.copy(),
                         }
@@ -2280,6 +2419,12 @@ class ColoringRegionExtractor(tk.Tk):
         self.include_border_var.set(
             params.get("include_border_regions", True)
         )
+        self.adaptive_micro_var.set(
+            params.get("adaptive_micro", True)
+        )
+        self.micro_min_area_var.set(
+            params.get("micro_min_area", 8)
+        )
 
         color_params = data.get("color_parameters", {})
         self.palette_size_var.set(
@@ -2302,6 +2447,12 @@ class ColoringRegionExtractor(tk.Tk):
         )
         self.split_smooth_var.set(
             color_params.get("split_smooth", 3)
+        )
+        self.relative_split_var.set(
+            color_params.get("relative_split", False)
+        )
+        self.split_min_percent_var.set(
+            color_params.get("split_min_percent", 0.08)
         )
 
         # Build current region geometry.
@@ -2387,6 +2538,7 @@ class ColoringRegionExtractor(tk.Tk):
                 "suggested_color_id": saved.get("suggested_color_id"),
                 "parent_id": saved.get("parent_id"),
                 "is_overlay": True,
+                "is_micro": False,
                 "priority": int(saved.get("priority", 1)),
                 "mask": mask.astype(bool),
             })
@@ -2456,6 +2608,8 @@ class ColoringRegionExtractor(tk.Tk):
                 "min_area": int(self.min_area_var.get()),
                 "simplify_epsilon": float(self.simplify_var.get()),
                 "include_border_regions": bool(self.include_border_var.get()),
+                "adaptive_micro": bool(self.adaptive_micro_var.get()),
+                "micro_min_area": int(self.micro_min_area_var.get()),
             },
             "color_parameters": {
                 "palette_size": int(self.palette_size_var.get()),
@@ -2465,6 +2619,8 @@ class ColoringRegionExtractor(tk.Tk):
                 "light_threshold": int(self.light_threshold_var.get()),
                 "split_min_area": int(self.split_min_area_var.get()),
                 "split_smooth": int(self.split_smooth_var.get()),
+                "relative_split": bool(self.relative_split_var.get()),
+                "split_min_percent": float(self.split_min_percent_var.get()),
             },
             "palette": self.palette,
             "regions": [
@@ -2479,6 +2635,7 @@ class ColoringRegionExtractor(tk.Tk):
                     "suggested_color_id": region.get("suggested_color_id"),
                     "parent_id": region.get("parent_id"),
                     "is_overlay": bool(region.get("is_overlay", False)),
+                    "is_micro": bool(region.get("is_micro", False)),
                     "priority": int(region.get("priority", 0)),
                 }
                 for region in self.regions
@@ -2755,6 +2912,7 @@ class ColoringRegionExtractor(tk.Tk):
                     "target_color": region.get("target_color"),
                     "parent_id": region.get("parent_id"),
                     "is_overlay": bool(region.get("is_overlay", False)),
+                    "is_micro": bool(region.get("is_micro", False)),
                     "priority": int(region.get("priority", 0)),
                 }
                 for region in self.regions
