@@ -3385,6 +3385,58 @@ class ColoringRegionExtractor(tk.Tk):
         }
 
     # ------------------------------------------------------------------
+    # SVG outline vectorization
+    # ------------------------------------------------------------------
+
+    def _outline_svg_path_data(self):
+        """
+        Convert the current binary line mask into one compound SVG path.
+
+        The black line artwork is already available as a binary mask. We trace
+        all contour boundaries and emit them into a single compound path using
+        fill-rule="evenodd". This preserves holes inside thick strokes and
+        keeps the outline as a true vector layer in the exported SVG.
+        """
+        if self.line_mask is None:
+            return ""
+
+        mask = (self.line_mask > 0).astype(np.uint8) * 255
+
+        contours, _hierarchy = cv2.findContours(
+            mask,
+            cv2.RETR_TREE,
+            cv2.CHAIN_APPROX_SIMPLE,
+        )
+
+        if not contours:
+            return ""
+
+        epsilon = max(0.35, float(self.simplify_var.get()) * 0.45)
+        subpaths = []
+
+        for contour in contours:
+            if len(contour) < 3:
+                continue
+
+            approx = cv2.approxPolyDP(contour, epsilon, True)
+            points = approx.reshape(-1, 2)
+
+            if len(points) < 3:
+                continue
+
+            subpath = (
+                "M "
+                + " ".join(
+                    f"{float(x):.2f},{float(y):.2f}"
+                    for x, y in points
+                )
+                + " Z"
+            )
+            subpaths.append(subpath)
+
+        return " ".join(subpaths)
+
+    # ------------------------------------------------------------------
     # Export
     # ------------------------------------------------------------------
 
@@ -3488,7 +3540,6 @@ class ColoringRegionExtractor(tk.Tk):
                         f'data-region-id="{region["id"]}" '
                         f'data-priority="{int(region.get("priority", 0))}" '
                         f'data-recovered="{1 if region.get("is_recovered", False) else 0}" '
-                    f'data-manual="{1 if region.get("is_manual", False) else 0}" '
                         f'data-manual="{1 if region.get("is_manual", False) else 0}" '
                         f'data-parent-id="{region.get("parent_id") if region.get("parent_id") is not None else ""}" '
                         f'd="{d}" fill="{color_hex}" stroke="none"/>'
@@ -3547,12 +3598,26 @@ class ColoringRegionExtractor(tk.Tk):
 
             parts.append("</g>")
 
-        parts.extend(
-            [
-                "</g>",
-                "</svg>",
-            ]
-        )
+        # Close game_areas first. The outline group is intentionally written
+        # afterwards so it is rendered above all fill polygons.
+        parts.append("</g>")
+
+        outline_path = self._outline_svg_path_data()
+
+        if outline_path:
+            parts.extend(
+                [
+                    '<g id="outlines" data-role="visual-outline" pointer-events="none">',
+                    (
+                        '<path id="outline_vector" '
+                        f'd="{outline_path}" '
+                        'fill="#000000" stroke="none" fill-rule="evenodd"/>'
+                    ),
+                    "</g>",
+                ]
+            )
+
+        parts.append("</svg>")
 
         Path(path).write_text(
             "\n".join(parts),
@@ -3560,7 +3625,7 @@ class ColoringRegionExtractor(tk.Tk):
         )
 
         self.status_var.set(
-            f"Game SVG gespeichert: {Path(path).name}"
+            f"Game SVG mit Vektor-Outline gespeichert: {Path(path).name}"
         )
 
     def export_game_json(self):
