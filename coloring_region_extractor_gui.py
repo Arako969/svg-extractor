@@ -110,6 +110,9 @@ class ColoringRegionExtractor(tk.Tk):
 
         # Text
         self.status_var = tk.StringVar(value="Bitte ein Outline-Bild öffnen.")
+        self.outline_points_before_var = tk.StringVar(value="Outline-Punkte vorher: -")
+        self.outline_points_after_var = tk.StringVar(value="Outline-Punkte nachher: -")
+        self.outline_reduction_var = tk.StringVar(value="Reduktion: -")
         self.color_file_var = tk.StringVar(value="Keine Farbvorlage geladen")
         self.region_count_var = tk.StringVar(value="Regionen: 0")
         self.active_count_var = tk.StringVar(value="Aktiv: 0")
@@ -675,6 +678,29 @@ class ColoringRegionExtractor(tk.Tk):
             controls_right,
             text="Export",
             font=("Helvetica", 13, "bold"),
+        ).pack(anchor="w")
+
+
+        outline_stats_frame = ttk.LabelFrame(
+            controls_right,
+            text="SVG-Outline-Optimierung",
+            padding=8,
+        )
+        outline_stats_frame.pack(fill="x", pady=(6, 8))
+
+        ttk.Label(
+            outline_stats_frame,
+            textvariable=self.outline_points_before_var,
+        ).pack(anchor="w")
+
+        ttk.Label(
+            outline_stats_frame,
+            textvariable=self.outline_points_after_var,
+        ).pack(anchor="w")
+
+        ttk.Label(
+            outline_stats_frame,
+            textvariable=self.outline_reduction_var,
         ).pack(anchor="w")
 
         ttk.Button(
@@ -3555,42 +3581,163 @@ class ColoringRegionExtractor(tk.Tk):
 
         return out
 
+    def _curvature_scores(self, points):
+        """Return local turning-angle scores for a closed contour."""
+        pts = np.asarray(points, dtype=np.float64)
+        n = len(pts)
+
+        if n < 3:
+            return np.zeros(n, dtype=np.float64)
+
+        prev_pts = np.roll(pts, 1, axis=0)
+        next_pts = np.roll(pts, -1, axis=0)
+
+        incoming = pts - prev_pts
+        outgoing = next_pts - pts
+
+        len_in = np.linalg.norm(incoming, axis=1)
+        len_out = np.linalg.norm(outgoing, axis=1)
+
+        denom = np.maximum(len_in * len_out, 1e-9)
+        cosang = np.sum(incoming * outgoing, axis=1) / denom
+        cosang = np.clip(cosang, -1.0, 1.0)
+
+        return np.arccos(cosang)
+
+    def _point_segment_distance(self, p, a, b):
+        """Distance from point p to line segment a-b."""
+        p = np.asarray(p, dtype=np.float64)
+        a = np.asarray(a, dtype=np.float64)
+        b = np.asarray(b, dtype=np.float64)
+
+        ab = b - a
+        denom = float(np.dot(ab, ab))
+
+        if denom <= 1e-12:
+            return float(np.linalg.norm(p - a))
+
+        t = float(np.dot(p - a, ab) / denom)
+        t = max(0.0, min(1.0, t))
+        projection = a + t * ab
+
+        return float(np.linalg.norm(p - projection))
+
+    def _worst_ring_segment_error(self, points, start_idx, end_idx):
+        """Return max error and worst point index between two retained anchors."""
+        pts = np.asarray(points, dtype=np.float64)
+        n = len(pts)
+
+        if n < 3 or start_idx == end_idx:
+            return 0.0, None
+
+        a = pts[start_idx]
+        b = pts[end_idx]
+
+        i = (start_idx + 1) % n
+        max_error = 0.0
+        worst_idx = None
+
+        while i != end_idx:
+            error = self._point_segment_distance(
+                pts[i],
+                a,
+                b,
+            )
+
+            if error > max_error:
+                max_error = error
+                worst_idx = i
+
+            i = (i + 1) % n
+
+        return max_error, worst_idx
+
     def _simplify_smooth_closed_contour(
         self,
         points,
-        tolerance=0.75,
-        min_points=8,
+        tolerance=0.50,
+        curvature_keep=0.14,
+        min_points=10,
     ):
         """
-        Simplify an already smoothed closed contour while preserving shape.
+        Curvature-aware simplification of an already smoothed closed contour.
 
-        Uses Douglas-Peucker on the smooth contour. Because simplification runs
-        *after* the signed-distance and low-pass smoothing stages, it removes
-        redundant anchor points without reintroducing raster stair-steps.
-
-        `tolerance` is measured in original image pixels and represents the
-        maximum allowed geometric deviation from the smoothed contour.
+        Long calm arcs are simplified more strongly. Areas with stronger local
+        turning retain more anchors. Every simplified segment is then validated
+        against the smoothed source contour and points are reinserted until the
+        maximum geometric deviation stays within `tolerance`.
         """
-        pts = np.asarray(points, dtype=np.float32)
+        pts = np.asarray(points, dtype=np.float64)
+        n = len(pts)
 
-        if len(pts) <= max(3, int(min_points)):
-            return pts.astype(np.float64)
+        if n <= max(3, int(min_points)):
+            return pts
 
-        contour = pts.reshape(-1, 1, 2)
+        contour = pts.astype(np.float32).reshape(-1, 1, 2)
 
         approx = cv2.approxPolyDP(
             contour,
             float(tolerance),
             True,
         )
+        approx_pts = approx.reshape(-1, 2).astype(np.float64)
 
-        simplified = approx.reshape(-1, 2).astype(np.float64)
+        keep = set()
 
-        # Avoid over-simplifying tiny/detail contours.
-        if len(simplified) < int(min_points):
-            return pts.astype(np.float64)
+        for point in approx_pts:
+            idx = int(
+                np.argmin(
+                    np.linalg.norm(
+                        pts - point,
+                        axis=1,
+                    )
+                )
+            )
+            keep.add(idx)
 
-        return simplified
+        curvature = self._curvature_scores(pts)
+
+        for idx, score in enumerate(curvature):
+            if score >= float(curvature_keep):
+                keep.add(idx)
+                keep.add((idx - 1) % n)
+                keep.add((idx + 1) % n)
+
+        if len(keep) < int(min_points):
+            step = max(
+                1,
+                n // int(min_points),
+            )
+            for idx in range(0, n, step):
+                keep.add(idx)
+
+        while True:
+            ordered = sorted(keep)
+            inserted = False
+
+            for pos, start_idx in enumerate(ordered):
+                end_idx = ordered[
+                    (pos + 1) % len(ordered)
+                ]
+
+                error, worst_idx = self._worst_ring_segment_error(
+                    pts,
+                    start_idx,
+                    end_idx,
+                )
+
+                if (
+                    error > float(tolerance)
+                    and worst_idx is not None
+                ):
+                    keep.add(int(worst_idx))
+                    inserted = True
+                    break
+
+            if not inserted:
+                break
+
+        return pts[sorted(keep)]
 
     def _outline_svg_path_data(self):
         """
@@ -3711,8 +3858,9 @@ class ColoringRegionExtractor(tk.Tk):
             # high zoom while removing many unnecessary anchor points.
             simplified = self._simplify_smooth_closed_contour(
                 points,
-                tolerance=0.75,
-                min_points=8,
+                tolerance=0.50,
+                curvature_keep=0.14,
+                min_points=10,
             )
 
             points_after += len(simplified)
@@ -3720,7 +3868,7 @@ class ColoringRegionExtractor(tk.Tk):
             # Slightly lower tension is safer once fewer anchors remain.
             subpath = self._closed_catmull_rom_svg_path(
                 simplified,
-                tension=0.42,
+                tension=0.44,
             )
 
             if subpath:
@@ -4016,6 +4164,33 @@ class ColoringRegionExtractor(tk.Tk):
             "\n".join(parts),
             encoding="utf-8",
         )
+
+        stats = getattr(
+            self,
+            "_last_outline_stats",
+            None,
+        )
+
+        if stats and stats.get("before", 0) > 0:
+            self.outline_points_before_var.set(
+                f"Outline-Punkte vorher: {stats['before']}"
+            )
+            self.outline_points_after_var.set(
+                f"Outline-Punkte nachher: {stats['after']}"
+            )
+            self.outline_reduction_var.set(
+                f"Reduktion: {stats['reduction_percent']:.1f}%"
+            )
+        else:
+            self.outline_points_before_var.set(
+                "Outline-Punkte vorher: -"
+            )
+            self.outline_points_after_var.set(
+                "Outline-Punkte nachher: -"
+            )
+            self.outline_reduction_var.set(
+                "Reduktion: -"
+            )
 
         self.status_var.set(
             f"Game SVG mit Vektor-Outline gespeichert: {Path(path).name}"
