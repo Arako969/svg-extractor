@@ -1,6 +1,6 @@
 # PROJECT-STATUS
 
-Aktueller Stand: **v0.10.0**
+Aktueller Stand: **v0.11.0**
 
 Dieses Dokument beschreibt den laufenden Entwicklungsstand des **Coloring Region Extractor** möglichst vollständig. Es ist bewusst detaillierter als `CHANGELOG.md`.
 
@@ -516,6 +516,31 @@ zur Gesamtansicht zurückkehren
 
 ---
 
+## v0.11.0
+
+SVG-Outline-Export qualitativ überarbeitet.
+
+### Ziel
+
+Der bisherige SVG-Export übernahm die rasterbasierte Rasterstruktur sichtbar in die Outline, erzeugte teils weiße Spalten zwischen Game Areas und Outline und eine unnötig hohe Zahl an Ankerpunkten.
+
+### Neue Funktionen
+
+- Outline als eigene Vektor-Ebene (`<g id="outlines">`) über den Game Areas exportiert, nicht mehr aus den Region-Rändern zusammengesetzt
+- Distanzfeld-basierte Glättung der Raster-Outline vor der Vektorisierung
+- Kontrollierte Fill-Überdeckung der Game Areas unter die Outline gegen weiße Spalten
+- Krümmungsabhängige adaptive Vereinfachung (Douglas-Peucker + Krümmungsschutz + Abweichungsprüfung)
+- Einstellbare Pixel-Toleranz im Export (0,20–1,20 px, Schritt 0,05 px), projektpersistent
+- Exportstatistiken (Ankerpunkte vorher/nachher, Reduktion %, verwendete Toleranz) dauerhaft im GUI sichtbar
+
+### Verifizierter Teststand
+
+Hundemotiv „dog-in-garden“: 9.942 → 4.314 Outline-Ankerpunkte (56,6 % Reduktion), SVG-Dateigröße bei konservativer Toleranz ca. 181 KB.
+
+Details siehe Abschnitt 9.
+
+---
+
 # 5. Aktuelle Regionstypen
 
 Das System kennt inzwischen verschiedene technische Regionstypen.
@@ -706,7 +731,7 @@ Sie dient derzeit als visuelle Deckschicht.
 
 ---
 
-# 9. SVG-Outline-Export (umgesetzt und getestet, noch nicht released)
+# 9. SVG-Outline-Export (released mit v0.11.0)
 
 Der SVG-Export schreibt jetzt zwei getrennte Ebenen:
 
@@ -724,7 +749,7 @@ Der SVG-Export schreibt jetzt zwei getrennte Ebenen:
 
 Die Outline liegt als letzte Ebene über den Game Areas und wird nicht mehr aus den einzelnen Game-Area-Rändern zusammengesetzt, sondern eigenständig aus der binären Line-Mask erzeugt.
 
-Umgesetzt auf Branch `feature/svg-outline-export` (noch nicht nach `main` gemerged, noch kein neues Release):
+Umgesetzt auf Branch `feature/svg-outline-export`, nach `main` gemerged und als `v0.11.0` released:
 
 ## Überdeckung gegen weiße Spalten
 
@@ -960,7 +985,7 @@ vMAJOR.MINOR.PATCH
 Aktuell:
 
 ```text
-v0.10.0
+v0.11.0
 ```
 
 ## Branches
@@ -1110,18 +1135,14 @@ Dadurch können:
 
 # 17. Aktueller Stand für den nächsten Arbeitsblock
 
-**Release-Stand:** `v0.10.0`
-
-**Abgeschlossen und vom Nutzer getestet, aber noch nicht gemerged/released:**
-
-- SVG-Outline-Export (Branch `feature/svg-outline-export`, siehe §9) — inhaltlich fertig, wartet auf Merge nach `main` und Entscheidung über die nächste Release-Version.
+**Release-Stand:** `v0.11.0`
 
 **Noch nicht released:**
 
 - endgültiger Godot-Importer
 - finales Austauschformat
 
-Empfohlener nächster Branch nach Merge von `feature/svg-outline-export`:
+Empfohlener nächster Branch:
 
 ```bash
 feature/godot-importer

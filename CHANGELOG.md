@@ -2,6 +2,17 @@
 
 Dieses Dokument enthält nur veröffentlichte Versionen.
 
+## v0.11.0
+
+SVG-Outline-Export qualitativ überarbeitet.
+
+- Outline als eigene Vektor-Ebene über den Game Areas exportiert, nicht mehr aus den Region-Rändern zusammengesetzt
+- Geglättete Vektor-Outlines ergänzt (Distanzfeld-basierte Glättung statt roher Pixelkontur)
+- Weiße Spalten zwischen Game Areas und Outline durch kontrollierte Fill-Überdeckung verhindert
+- Adaptive, krümmungsabhängige Outline-Vereinfachung ergänzt
+- Einstellbare Pixel-Toleranz im Export ergänzt (0,20–1,20 px, Schritt 0,05 px)
+- Exportstatistiken für Ankerpunktreduktion ergänzt (Punkte vorher/nachher, Reduktion %, Toleranz)
+
 ## v0.10.0
 
 Drei-Spalten-Oberfläche, Fit-to-View, Zoom und bessere Vorschau-Navigation ergänzt.
