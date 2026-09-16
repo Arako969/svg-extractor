@@ -706,11 +706,9 @@ Sie dient derzeit als visuelle Deckschicht.
 
 ---
 
-# 9. Noch offene SVG-Entscheidung
+# 9. SVG-Outline-Export (umgesetzt und getestet, noch nicht released)
 
-Aktuell werden hauptsächlich die Game Areas in das SVG geschrieben.
-
-Als nächster Schritt ist vorgesehen:
+Der SVG-Export schreibt jetzt zwei getrennte Ebenen:
 
 ```xml
 <svg>
@@ -718,21 +716,60 @@ Als nächster Schritt ist vorgesehen:
         ...
     </g>
 
-    <g id="outlines">
-        ...
+    <g id="outlines" data-role="visual-outline" pointer-events="none">
+        <path id="outline_vector" ... />
     </g>
 </svg>
 ```
 
-Die Outline soll dabei als letzte Ebene gespeichert werden und damit visuell über den Farbflächen liegen.
+Die Outline liegt als letzte Ebene über den Game Areas und wird nicht mehr aus den einzelnen Game-Area-Rändern zusammengesetzt, sondern eigenständig aus der binären Line-Mask erzeugt.
 
-Ziel:
+Umgesetzt auf Branch `feature/svg-outline-export` (noch nicht nach `main` gemerged, noch kein neues Release):
 
-- Game Areas als Vektoren
-- Outline ebenfalls als Vektorebene
-- optional Outline PNG weiterhin als Fallback
+## Überdeckung gegen weiße Spalten
 
-Diese Änderung ist noch **nicht** als Release umgesetzt.
+Die Game-Area-Füllungen reichen kontrolliert unter die schwarze Outline (`_svg_fill_points_with_outline_bleed`, `bleed_px=3`). Die sichtbare Kante wird danach von der darüberliegenden Outline bestimmt, wodurch keine weißen Spalten zwischen Farbfläche und Outline entstehen.
+
+## Glättung der Raster-Outline
+
+Statt die rohe Pixelkontur direkt zu vektorisieren, läuft die Outline durch eine mehrstufige Pipeline: binäre Line-Mask hochskalieren → Signed-Distance-Feld aus Innen-/Außendistanz erzeugen → Distanzfeld symmetrisch glätten → geglättete Nullkontur extrahieren → Kontur gleichmäßig resamplen → zyklische Konturglättung → Ausgabe als geschlossene Bezier-Geometrie (Catmull-Rom-Kurven, Tension `0.44`). Dadurch sind die ursprünglich sichtbaren Rastertreppen stark reduziert.
+
+## Krümmungsabhängige Vereinfachung
+
+Douglas-Peucker dient als konservative Grundvereinfachung; Bereiche mit stärkerer lokaler Krümmung (`curvature_keep=0.14`) sowie deren Nachbarpunkte behalten zusätzliche Ankerpunkte. Jeder vereinfachte Abschnitt wird gegen die geglättete Ausgangskontur geprüft — überschreitet die Abweichung die gewählte Pixel-Toleranz, wird an der Stelle der größten Abweichung automatisch wieder ein Ankerpunkt ergänzt, bis alle Segmente innerhalb der Toleranz liegen. Lange ruhige Bögen werden dadurch stärker vereinfacht, während Ohren, Pfoten, Büsche, Ballsegmente und andere Formwechsel mehr Geometrie behalten.
+
+## Einstellbare Pixel-Toleranz
+
+Regler im Exportbereich: `Pixel-Toleranz`, Bereich `0,20`–`1,20 px`, Schrittweite `0,05 px`, Anzeige mit zwei Nachkommastellen. Kleinere Werte = mehr Ankerpunkte und höhere Formtreue, größere Werte = weniger Ankerpunkte und kleinere Dateien. Wert wird im Projekt gespeichert (`svg_outline_tolerance`) und beim Laden wiederhergestellt.
+
+## Exportstatistiken
+
+Nach jedem SVG-Export dauerhaft im GUI sichtbar: Outline-Punkte vorher, Outline-Punkte nachher, Reduktion in Prozent, verwendete Pixel-Toleranz.
+
+## Verifizierter Teststand (Hundemotiv „dog-in-garden“)
+
+- Outline-Punkte vorher: 9.942, nachher: 4.314, Reduktion: 56,6 %
+- Sehr konservative Toleranz: SVG-Dateigröße ca. 181 KB
+- Frühere, stark punktreiche geglättete Version: ca. 474 KB
+- Aggressiver vereinfachte Zwischenversion: ca. 128 KB, aber wieder leicht sichtbare Kanten
+
+Daraus abgeleitete Qualitätsentscheidung — Priorität in dieser Reihenfolge:
+
+1. saubere und weiche sichtbare Outline
+2. keine weißen Spalten zwischen Game Areas und Outline
+3. zuverlässige geschlossene Geometrie
+4. möglichst geringe geometrische Abweichung
+5. erst danach Reduktion der Ankerpunkte/Dateigröße
+
+Maximale Dateireduktion ist also bewusst nicht das primäre Ziel; die Pixel-Toleranz bleibt deshalb pro Motiv einstellbar statt fest im Code hinterlegt.
+
+## Bewusst nicht verändert
+
+Regionserkennung, Game-Area-Logik, Gruppierung, Farbzuordnung, Klick-/Selektionslogik, JSON-Grundstruktur, manuell ergänzte Regionen und farbbasierte Unterregionen sind von dieser Optimierung unberührt — sie betrifft ausschließlich die sichtbare SVG-Outline bzw. deren Export.
+
+## Noch offene Langzeittests
+
+Kein Blocker für den Abschluss des Branches. Die gleiche Export-Pipeline sollte später zusätzlich an weiteren Motivtypen geprüft werden: komplexe Tiere, sehr kleine Details, Pflanzen/organische Formen, Fahrzeuge mit langen geraden Kanten, perspektivische Motive. Falls einzelne Motivtypen andere optimale Toleranzen brauchen, steht dafür bereits der GUI-Regler zur Verfügung.
 
 ---
 
@@ -1075,19 +1112,16 @@ Dadurch können:
 
 **Release-Stand:** `v0.10.0`
 
+**Abgeschlossen und vom Nutzer getestet, aber noch nicht gemerged/released:**
+
+- SVG-Outline-Export (Branch `feature/svg-outline-export`, siehe §9) — inhaltlich fertig, wartet auf Merge nach `main` und Entscheidung über die nächste Release-Version.
+
 **Noch nicht released:**
 
-- geplante SVG-Outline-Erweiterung
 - endgültiger Godot-Importer
 - finales Austauschformat
 
-Empfohlener nächster Branch:
-
-```bash
-feature/svg-outline-export
-```
-
-Danach voraussichtlich:
+Empfohlener nächster Branch nach Merge von `feature/svg-outline-export`:
 
 ```bash
 feature/godot-importer
