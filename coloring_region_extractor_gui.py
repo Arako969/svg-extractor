@@ -113,6 +113,8 @@ class ColoringRegionExtractor(tk.Tk):
         self.outline_points_before_var = tk.StringVar(value="Outline-Punkte vorher: -")
         self.outline_points_after_var = tk.StringVar(value="Outline-Punkte nachher: -")
         self.outline_reduction_var = tk.StringVar(value="Reduktion: -")
+        self.svg_outline_tolerance_var = tk.DoubleVar(value=0.60)
+        self.outline_tolerance_display_var = tk.StringVar(value="Toleranz beim letzten Export: -")
         self.color_file_var = tk.StringVar(value="Keine Farbvorlage geladen")
         self.region_count_var = tk.StringVar(value="Regionen: 0")
         self.active_count_var = tk.StringVar(value="Aktiv: 0")
@@ -681,6 +683,32 @@ class ColoringRegionExtractor(tk.Tk):
         ).pack(anchor="w")
 
 
+        ttk.Label(
+            controls_right,
+            text="SVG-Outline Vereinfachung",
+            font=("Helvetica", 11, "bold"),
+        ).pack(anchor="w", pady=(4, 0))
+
+        ttk.Label(
+            controls_right,
+            text=(
+                "Max. Abweichung der vereinfachten Kontur. "
+                "Kleinere Werte = mehr Ankerpunkte und höhere Formtreue. "
+                "Größere Werte = weniger Ankerpunkte und kleinere SVG-Dateien."
+            ),
+            wraplength=330,
+            justify="left",
+        ).pack(anchor="w", pady=(2, 2))
+
+        self._add_slider(
+            controls_right,
+            "Pixel-Toleranz",
+            self.svg_outline_tolerance_var,
+            0.20,
+            1.20,
+            is_float=True,
+        )
+
         outline_stats_frame = ttk.LabelFrame(
             controls_right,
             text="SVG-Outline-Optimierung",
@@ -701,6 +729,11 @@ class ColoringRegionExtractor(tk.Tk):
         ttk.Label(
             outline_stats_frame,
             textvariable=self.outline_reduction_var,
+        ).pack(anchor="w")
+
+        ttk.Label(
+            outline_stats_frame,
+            textvariable=self.outline_tolerance_display_var,
         ).pack(anchor="w")
 
         ttk.Button(
@@ -3154,6 +3187,9 @@ class ColoringRegionExtractor(tk.Tk):
         self.include_border_var.set(
             params.get("include_border_regions", True)
         )
+        self.svg_outline_tolerance_var.set(
+            params.get("svg_outline_tolerance", 0.60)
+        )
         self.adaptive_micro_var.set(
             params.get("adaptive_micro", True)
         )
@@ -3359,6 +3395,7 @@ class ColoringRegionExtractor(tk.Tk):
                 "min_area": int(self.min_area_var.get()),
                 "simplify_epsilon": float(self.simplify_var.get()),
                 "include_border_regions": bool(self.include_border_var.get()),
+                "svg_outline_tolerance": float(self.svg_outline_tolerance_var.get()),
                 "adaptive_micro": bool(self.adaptive_micro_var.get()),
                 "micro_min_area": int(self.micro_min_area_var.get()),
             },
@@ -3856,9 +3893,14 @@ class ColoringRegionExtractor(tk.Tk):
             # Main adaptive simplification step.
             # 0.75 px keeps the curve visually almost identical at normal and
             # high zoom while removing many unnecessary anchor points.
+            tolerance = max(
+                0.05,
+                float(self.svg_outline_tolerance_var.get()),
+            )
+
             simplified = self._simplify_smooth_closed_contour(
                 points,
-                tolerance=0.50,
+                tolerance=tolerance,
                 curvature_keep=0.14,
                 min_points=10,
             )
@@ -3885,6 +3927,7 @@ class ColoringRegionExtractor(tk.Tk):
             "before": int(points_before),
             "after": int(points_after),
             "reduction_percent": float(reduction),
+            "tolerance": float(self.svg_outline_tolerance_var.get()),
         }
 
         return " ".join(subpaths)
@@ -4181,6 +4224,9 @@ class ColoringRegionExtractor(tk.Tk):
             self.outline_reduction_var.set(
                 f"Reduktion: {stats['reduction_percent']:.1f}%"
             )
+            self.outline_tolerance_display_var.set(
+                f"Toleranz beim letzten Export: {stats.get('tolerance', float(self.svg_outline_tolerance_var.get())):.2f} px"
+            )
         else:
             self.outline_points_before_var.set(
                 "Outline-Punkte vorher: -"
@@ -4190,6 +4236,9 @@ class ColoringRegionExtractor(tk.Tk):
             )
             self.outline_reduction_var.set(
                 "Reduktion: -"
+            )
+            self.outline_tolerance_display_var.set(
+                "Toleranz beim letzten Export: -"
             )
 
         self.status_var.set(
