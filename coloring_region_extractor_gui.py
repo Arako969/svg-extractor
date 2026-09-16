@@ -693,6 +693,7 @@ class ColoringRegionExtractor(tk.Tk):
             controls_right,
             text=(
                 "Max. Abweichung der vereinfachten Kontur. "
+                "Einstellung in 0,05-px-Schritten. "
                 "Kleinere Werte = mehr Ankerpunkte und höhere Formtreue. "
                 "Größere Werte = weniger Ankerpunkte und kleinere SVG-Dateien."
             ),
@@ -707,6 +708,8 @@ class ColoringRegionExtractor(tk.Tk):
             0.20,
             1.20,
             is_float=True,
+            step=0.05,
+            decimals=2,
         )
 
         outline_stats_frame = ttk.LabelFrame(
@@ -864,7 +867,17 @@ class ColoringRegionExtractor(tk.Tk):
         self.pan_y = self._pan_origin[1] + event.y - self._pan_start[1]
         self.refresh_preview()
 
-    def _add_slider(self, parent, label, variable, minimum, maximum, is_float=False):
+    def _add_slider(
+        self,
+        parent,
+        label,
+        variable,
+        minimum,
+        maximum,
+        is_float=False,
+        step=None,
+        decimals=None,
+    ):
         frame = ttk.Frame(parent)
         frame.pack(fill="x", pady=4)
 
@@ -883,17 +896,51 @@ class ColoringRegionExtractor(tk.Tk):
             orient="horizontal",
         ).pack(fill="x")
 
+        updating = {"active": False}
+
         def update(*_):
+            if updating["active"]:
+                return
+
             if is_float:
-                value_label.configure(text=f"{float(variable.get()):.1f}")
+                value = float(variable.get())
+
+                if step is not None and step > 0:
+                    snapped = round(
+                        (value - minimum) / step
+                    ) * step + minimum
+
+                    snapped = max(
+                        float(minimum),
+                        min(float(maximum), snapped),
+                    )
+
+                    # Avoid endless trace recursion caused by float noise.
+                    if abs(snapped - value) > 1e-9:
+                        updating["active"] = True
+                        variable.set(snapped)
+                        updating["active"] = False
+                        value = snapped
+
+                digits = (
+                    1
+                    if decimals is None
+                    else int(decimals)
+                )
+
+                value_label.configure(
+                    text=f"{value:.{digits}f}"
+                )
             else:
                 val = int(round(variable.get()))
+
                 if variable is self.close_size_var:
                     if val < 1:
                         val = 1
                     if val % 2 == 0:
                         val += 1
                     variable.set(val)
+
                 value_label.configure(text=str(val))
 
         variable.trace_add("write", update)
