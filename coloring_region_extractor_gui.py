@@ -3434,62 +3434,119 @@ class ColoringRegionExtractor(tk.Tk):
         parts.append("Z")
         return " ".join(parts)
 
+    def _resample_closed_contour(self, points, spacing=2.4):
+        """
+        Resample a closed contour at nearly uniform arc-length spacing.
+
+        Uniform sampling is important before Bezier conversion. Raster contours
+        otherwise contain clusters of points in some places and long gaps in
+        others, which can leave visible bumps even after curve smoothing.
+        """
+        pts = np.asarray(points, dtype=np.float64)
+
+        if len(pts) < 3:
+            return pts
+
+        # Remove consecutive duplicates.
+        cleaned = [pts[0]]
+        for p in pts[1:]:
+            if np.linalg.norm(p - cleaned[-1]) > 1e-6:
+                cleaned.append(p)
+
+        pts = np.asarray(cleaned, dtype=np.float64)
+
+        if len(pts) < 3:
+            return pts
+
+        closed = np.vstack([pts, pts[0]])
+        seg = np.linalg.norm(np.diff(closed, axis=0), axis=1)
+        total = float(seg.sum())
+
+        if total <= 0.0:
+            return pts
+
+        count = max(8, int(round(total / max(0.8, float(spacing)))))
+        targets = np.linspace(0.0, total, count, endpoint=False)
+
+        cumulative = np.concatenate([[0.0], np.cumsum(seg)])
+        result = []
+
+        j = 0
+        for t in targets:
+            while j < len(seg) - 1 and cumulative[j + 1] < t:
+                j += 1
+
+            length = seg[j]
+            if length <= 1e-9:
+                result.append(closed[j].copy())
+                continue
+
+            local = (t - cumulative[j]) / length
+            p = closed[j] * (1.0 - local) + closed[j + 1] * local
+            result.append(p)
+
+        return np.asarray(result, dtype=np.float64)
+
     def _outline_svg_path_data(self):
         """
-        Export the black outline as a thickness-preserving smooth vector path.
+        Export a smooth, thickness-preserving vector outline.
 
-        Important:
-        The previous blur-based smoothing changed the inner and outer boundary
-        independently. That could make the black line locally thinner and could
-        expose white seams between fills and outline.
+        Key difference from the previous version:
+        Instead of simplifying a pixel contour aggressively, this version
+        smooths a signed-distance representation symmetrically around the
+        original black line, traces it at high resolution, resamples it at
+        uniform arc length, and only then converts it to cubic Bezier curves.
 
-        This version instead:
-        1. supersamples the original binary line mask,
-        2. traces the supersampled silhouette,
-        3. simplifies only very lightly,
-        4. converts the contour to gentle cubic curves,
-        5. scales the coordinates back to the original canvas.
+        That removes the remaining staircase/bumpy appearance while preserving
+        line thickness much better than blurring the binary mask itself.
 
-        The original outline thickness is therefore preserved much better.
-        Game-area masks and JSON geometry remain unchanged.
+        Game-area masks, hit geometry and JSON remain untouched.
         """
         if self.line_mask is None:
             return ""
 
-        scale = 4
+        scale = 6
 
-        mask = (self.line_mask > 0).astype(np.uint8) * 255
+        mask = (self.line_mask > 0).astype(np.uint8)
 
-        # Supersampling creates sub-pixel boundary information without first
-        # shrinking the original black line through Gaussian thresholding.
+        # Work at high resolution.
         hi = cv2.resize(
             mask,
             None,
             fx=scale,
             fy=scale,
-            interpolation=cv2.INTER_CUBIC,
+            interpolation=cv2.INTER_NEAREST,
         )
 
-        _, hi = cv2.threshold(
+        # Signed distance:
+        # positive inside the black line, negative outside.
+        inside = cv2.distanceTransform(
             hi,
-            127,
-            255,
-            cv2.THRESH_BINARY,
+            cv2.DIST_L2,
+            5,
         )
 
-        # Close only microscopic interpolation pinholes at supersampled scale.
-        kernel = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE,
-            (3, 3),
+        outside = cv2.distanceTransform(
+            1 - hi,
+            cv2.DIST_L2,
+            5,
         )
-        hi = cv2.morphologyEx(
-            hi,
-            cv2.MORPH_CLOSE,
-            kernel,
+
+        signed = inside - outside
+
+        # Symmetric smoothing of the distance field avoids shrinking one side
+        # of the stroke more strongly than the other.
+        signed = cv2.GaussianBlur(
+            signed,
+            (0, 0),
+            sigmaX=2.0,
+            sigmaY=2.0,
         )
+
+        smooth_mask = (signed >= 0.0).astype(np.uint8) * 255
 
         contours, _hierarchy = cv2.findContours(
-            hi,
+            smooth_mask,
             cv2.RETR_TREE,
             cv2.CHAIN_APPROX_NONE,
         )
@@ -3500,44 +3557,33 @@ class ColoringRegionExtractor(tk.Tk):
         subpaths = []
 
         for contour in contours:
-            if len(contour) < 8:
+            if len(contour) < 10:
                 continue
 
-            perimeter = cv2.arcLength(contour, True)
-
-            # Measured in supersampled pixels.
-            # Keep considerably more geometry than the previous version.
-            epsilon = max(
-                1.6,
-                min(
-                    5.0,
-                    perimeter * 0.00045,
-                ),
-            )
-
-            approx = cv2.approxPolyDP(
-                contour,
-                epsilon,
-                True,
-            )
-
             points = (
-                approx.reshape(-1, 2).astype(np.float64)
+                contour.reshape(-1, 2).astype(np.float64)
                 / float(scale)
+            )
+
+            area = abs(cv2.contourArea(contour)) / float(scale * scale)
+            if area < 1.0:
+                continue
+
+            # Uniform resampling removes the last traces of raster-step point
+            # distribution before the cubic curve is fitted.
+            points = self._resample_closed_contour(
+                points,
+                spacing=2.2,
             )
 
             if len(points) < 3:
                 continue
 
-            area = abs(cv2.contourArea(approx)) / float(scale * scale)
-            if area < 1.0:
-                continue
-
-            # Lower tension than before. This gives visibly smooth curves while
-            # avoiding the strong Bezier overshoot that changed line thickness.
+            # Slightly stronger curve interpolation than the previous version,
+            # but still conservative enough to avoid changing stroke width.
             subpath = self._closed_catmull_rom_svg_path(
                 points,
-                tension=0.42,
+                tension=0.62,
             )
 
             if subpath:
