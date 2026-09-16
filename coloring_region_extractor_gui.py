@@ -3555,21 +3555,58 @@ class ColoringRegionExtractor(tk.Tk):
 
         return out
 
+    def _simplify_smooth_closed_contour(
+        self,
+        points,
+        tolerance=0.75,
+        min_points=8,
+    ):
+        """
+        Simplify an already smoothed closed contour while preserving shape.
+
+        Uses Douglas-Peucker on the smooth contour. Because simplification runs
+        *after* the signed-distance and low-pass smoothing stages, it removes
+        redundant anchor points without reintroducing raster stair-steps.
+
+        `tolerance` is measured in original image pixels and represents the
+        maximum allowed geometric deviation from the smoothed contour.
+        """
+        pts = np.asarray(points, dtype=np.float32)
+
+        if len(pts) <= max(3, int(min_points)):
+            return pts.astype(np.float64)
+
+        contour = pts.reshape(-1, 1, 2)
+
+        approx = cv2.approxPolyDP(
+            contour,
+            float(tolerance),
+            True,
+        )
+
+        simplified = approx.reshape(-1, 2).astype(np.float64)
+
+        # Avoid over-simplifying tiny/detail contours.
+        if len(simplified) < int(min_points):
+            return pts.astype(np.float64)
+
+        return simplified
+
     def _outline_svg_path_data(self):
         """
-        Export a very smooth, thickness-stable vector outline.
+        Export a smooth and adaptively simplified vector outline.
 
         Pipeline:
         1. Upscale the original binary line mask 8x.
-        2. Build a signed-distance field.
-        3. Smooth that field symmetrically around the stroke center.
-        4. Trace the zero-level silhouette.
-        5. Uniformly resample each contour.
-        6. Apply a cyclic low-pass contour filter.
-        7. Export gentle cubic Bezier curves.
+        2. Build and symmetrically smooth a signed-distance field.
+        3. Trace the smooth zero-level silhouette.
+        4. Uniformly resample each contour.
+        5. Apply cyclic low-pass smoothing.
+        6. Adaptively simplify the smoothed contour with a sub-pixel tolerance.
+        7. Export the reduced contour as cubic Bezier curves.
 
-        Compared with the previous version, the additional contour low-pass
-        stage removes the remaining small scallops/waves visible at high zoom.
+        The simplification happens only after smoothing. This keeps the visual
+        result smooth while greatly reducing redundant SVG anchor points.
 
         Game-area masks, interaction geometry and JSON remain unchanged.
         """
@@ -3604,7 +3641,6 @@ class ColoringRegionExtractor(tk.Tk):
 
         signed = inside - outside
 
-        # Slightly stronger than v2, but still symmetric around the stroke.
         signed = cv2.GaussianBlur(
             signed,
             (0, 0),
@@ -3623,9 +3659,16 @@ class ColoringRegionExtractor(tk.Tk):
         )
 
         if not contours:
+            self._last_outline_stats = {
+                "before": 0,
+                "after": 0,
+                "reduction_percent": 0.0,
+            }
             return ""
 
         subpaths = []
+        points_before = 0
+        points_after = 0
 
         for contour in contours:
             if len(contour) < 12:
@@ -3645,8 +3688,6 @@ class ColoringRegionExtractor(tk.Tk):
                 / float(scale)
             )
 
-            # Use fewer, evenly spaced samples so tiny pixel steps are not
-            # treated as intentional geometry.
             points = self._resample_closed_contour(
                 points,
                 spacing=3.4,
@@ -3655,7 +3696,6 @@ class ColoringRegionExtractor(tk.Tk):
             if len(points) < 5:
                 continue
 
-            # The main extra smoothing stage.
             points = self._smooth_closed_contour(
                 points,
                 passes=3,
@@ -3664,14 +3704,40 @@ class ColoringRegionExtractor(tk.Tk):
             if len(points) < 3:
                 continue
 
-            # Lower tension avoids small overshoots between the smoothed points.
-            subpath = self._closed_catmull_rom_svg_path(
+            points_before += len(points)
+
+            # Main adaptive simplification step.
+            # 0.75 px keeps the curve visually almost identical at normal and
+            # high zoom while removing many unnecessary anchor points.
+            simplified = self._simplify_smooth_closed_contour(
                 points,
-                tension=0.48,
+                tolerance=0.75,
+                min_points=8,
+            )
+
+            points_after += len(simplified)
+
+            # Slightly lower tension is safer once fewer anchors remain.
+            subpath = self._closed_catmull_rom_svg_path(
+                simplified,
+                tension=0.42,
             )
 
             if subpath:
                 subpaths.append(subpath)
+
+        reduction = 0.0
+        if points_before > 0:
+            reduction = (
+                1.0
+                - (points_after / float(points_before))
+            ) * 100.0
+
+        self._last_outline_stats = {
+            "before": int(points_before),
+            "after": int(points_after),
+            "reduction_percent": float(reduction),
+        }
 
         return " ".join(subpaths)
 
