@@ -56,6 +56,16 @@ Dreigeteiltes `ttk.Panedwindow`, aufgebaut in `_build_ui()`: scrollbare linke Si
 - `export_preview()` — gerenderte Vorschau als PNG.
 - `save_project()` / `load_project()` — vollständiges Roundtrip des Editor-Zustands (`_project_data()`), unabhängig von den obigen Exportformaten.
 
+## Handoff-Dokumente
+
+`PROJECT-STATUS.md` und `DEVELOPMENT-HANDOFF.md` sind der Übergabemechanismus zwischen Chat-Sitzungen — sie ersetzen das Rekonstruieren der Konversationshistorie. Nach jeder größeren Arbeitseinheit (Feature abgeschlossen, wichtige Entscheidung getroffen, vor einem Sitzungswechsel):
+
+1. `PROJECT-STATUS.md` auf den aktuellen Stand bringen.
+2. `DEVELOPMENT-HANDOFF.md` auf den unmittelbar nächsten Arbeitsschritt setzen.
+3. Beides zusammen committen (siehe `GIT-WORKFLOW.md` Abschnitt "Handoff-Pflicht").
+
+Bei Sitzungsbeginn zuerst `DEVELOPMENT-HANDOFF.md` und `PROJECT-STATUS.md` lesen, bevor an der Aufgabe gearbeitet wird.
+
 ## Versionierung & Git-Workflow
 
 Details in `GIT-WORKFLOW.md`; kurz zusammengefasst:

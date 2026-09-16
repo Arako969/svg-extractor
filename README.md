@@ -27,7 +27,9 @@ Siehe [`VERSION`](VERSION). Der aktuelle historische Stand ist `0.10.0`.
 - `VERSION`: aktuelle Release-Version
 - `CHANGELOG.md`: Release-Historie
 - `PROJECT-STATUS.md`: laufender Projektstand
+- `DEVELOPMENT-HANDOFF.md`: kompakte Momentaufnahme für den Wechsel in einen neuen Chat/eine neue Sitzung – nach jeder größeren Arbeitseinheit aktualisieren (siehe `GIT-WORKFLOW.md`)
 - `GIT-WORKFLOW.md`: Git- und Release-Ablauf
+- `CLAUDE.md`: Kontext für Claude Code
 - `history/`: unveränderte historische Python-Dateien
 
 ## Alte Version ansehen
