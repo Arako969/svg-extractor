@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Coloring Region Extractor v8
+Coloring Region Extractor v9
 
 Features:
 - Automatic closed-region detection
@@ -21,7 +21,7 @@ Requirements:
     pip install opencv-python pillow numpy
 
 Run:
-    python3 coloring_region_extractor_gui_v8.py
+    python3 coloring_region_extractor_gui_v9.py
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ class ColoringRegionExtractor(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("Coloring Region Extractor v8")
+        self.title("Coloring Region Extractor v9")
         self.geometry("1720x980")
         self.minsize(1050, 700)
         self.resizable(True, True)
@@ -511,12 +511,20 @@ class ColoringRegionExtractor(tk.Tk):
             variable=self.mode_var,
         ).pack(side="left", padx=(12, 0))
 
+        ttk.Radiobutton(
+            modes,
+            text="Fehlende Fläche hinzufügen",
+            value="manual_add",
+            variable=self.mode_var,
+        ).pack(side="left", padx=(12, 0))
+
         ttk.Label(
             left,
             text=(
                 "Klick: eine Region auswählen\n"
                 "Shift + Klick: Auswahl erweitern/entfernen\n"
-                "Label setzen: Gruppe wählen und ins Bild klicken"
+                "Label setzen: Gruppe wählen und ins Bild klicken\n"
+                "Fehlende Fläche hinzufügen: direkt in die kleine Fläche klicken"
             ),
             justify="left",
         ).pack(anchor="w", pady=(0, 7))
@@ -2035,6 +2043,20 @@ class ColoringRegionExtractor(tk.Tk):
 
         preview[self.line_mask > 0] = (25, 25, 25)
 
+        # Mark manually added regions in green.
+        for region in self.regions:
+            if not region.get("is_manual", False) or not region.get("active", True):
+                continue
+            rmask = self._region_mask(region)
+            if rmask is None:
+                continue
+            contours, _ = cv2.findContours(
+                rmask.astype(np.uint8) * 255,
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
+            cv2.drawContours(preview, contours, -1, (60, 255, 60), 2)
+
         # Mark automatically recovered regions so they are easy to review.
         for region in self.regions:
             if not region.get("is_recovered", False) or not region.get("active", True):
@@ -2088,9 +2110,12 @@ class ColoringRegionExtractor(tk.Tk):
                     continue
                 if self._group_for_region(region["id"]):
                     continue
-                if region["area"] < max(
-                    500,
-                    int(self.min_area_var.get()) * 2,
+                if (
+                    not region.get("force_label", False)
+                    and region["area"] < max(
+                        500,
+                        int(self.min_area_var.get()) * 2,
+                    )
                 ):
                     continue
 
@@ -2233,6 +2258,239 @@ class ColoringRegionExtractor(tk.Tk):
             anchor="nw",
         )
 
+
+    # ------------------------------------------------------------------
+    # Manual missing-region recovery
+    # ------------------------------------------------------------------
+
+    def _raw_component_at(self, x, y):
+        """Find the raw white component at a click without morphology closing."""
+        if self.gray is None:
+            return None
+
+        threshold = int(self.threshold_var.get())
+        raw_line = (self.gray < threshold).astype(np.uint8) * 255
+        raw_white = cv2.bitwise_not(raw_line)
+        raw_binary = (raw_white > 0).astype(np.uint8)
+
+        h, w = raw_binary.shape
+        if not (0 <= x < w and 0 <= y < h) or raw_binary[y, x] == 0:
+            return None
+
+        _count, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            raw_binary, connectivity=8
+        )
+
+        label_id = int(labels[y, x])
+        if label_id <= 0:
+            return None
+
+        area = int(stats[label_id, cv2.CC_STAT_AREA])
+        mask = labels == label_id
+
+        contour_img = mask.astype(np.uint8) * 255
+        contours, _ = cv2.findContours(
+            contour_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        if not contours:
+            return None
+
+        contour = max(contours, key=cv2.contourArea)
+        approx = cv2.approxPolyDP(
+            contour, float(self.simplify_var.get()), True
+        )
+        points = approx.reshape(-1, 2)
+        if len(points) < 3:
+            return None
+
+        xx = int(stats[label_id, cv2.CC_STAT_LEFT])
+        yy = int(stats[label_id, cv2.CC_STAT_TOP])
+        ww = int(stats[label_id, cv2.CC_STAT_WIDTH])
+        hh = int(stats[label_id, cv2.CC_STAT_HEIGHT])
+        cx, cy = centroids[label_id]
+
+        return {
+            "mask": mask,
+            "area": area,
+            "bbox": [xx, yy, ww, hh],
+            "centroid": [float(cx), float(cy)],
+            "points": points.tolist(),
+        }
+
+    def _color_component_at(self, x, y):
+        """Fallback: recover the clicked connected palette-color island."""
+        if self.color_bgr is None or not self.palette:
+            return None
+
+        color_map = self._palette_label_map_full_image()
+        if color_map is None:
+            return None
+
+        h, w = color_map.shape
+        if not (0 <= x < w and 0 <= y < h):
+            return None
+
+        color_id = int(color_map[y, x])
+        if color_id <= 0:
+            return None
+
+        mask = (color_map == color_id).astype(np.uint8)
+
+        hsv = cv2.cvtColor(self.color_bgr, cv2.COLOR_BGR2HSV)
+        if self.ignore_dark_var.get():
+            mask[hsv[:, :, 2] <= int(self.dark_threshold_var.get())] = 0
+
+        _count, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            mask, connectivity=8
+        )
+
+        label_id = int(labels[y, x])
+        if label_id <= 0:
+            return None
+
+        comp_mask = labels == label_id
+        area = int(stats[label_id, cv2.CC_STAT_AREA])
+
+        contour_img = comp_mask.astype(np.uint8) * 255
+        contours, _ = cv2.findContours(
+            contour_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        if not contours:
+            return None
+
+        contour = max(contours, key=cv2.contourArea)
+        approx = cv2.approxPolyDP(
+            contour, float(self.simplify_var.get()), True
+        )
+        points = approx.reshape(-1, 2)
+        if len(points) < 3:
+            return None
+
+        xx = int(stats[label_id, cv2.CC_STAT_LEFT])
+        yy = int(stats[label_id, cv2.CC_STAT_TOP])
+        ww = int(stats[label_id, cv2.CC_STAT_WIDTH])
+        hh = int(stats[label_id, cv2.CC_STAT_HEIGHT])
+        cx, cy = centroids[label_id]
+
+        return {
+            "mask": comp_mask,
+            "area": area,
+            "bbox": [xx, yy, ww, hh],
+            "centroid": [float(cx), float(cy)],
+            "points": points.tolist(),
+            "suggested_color_id": color_id,
+        }
+
+    def _find_existing_region_covering_point(self, x, y):
+        candidates = []
+
+        for region in self.regions:
+            if not region.get("active", True):
+                continue
+            mask = self._region_mask(region)
+            if mask is not None and bool(mask[y, x]):
+                candidates.append(region)
+
+        if not candidates:
+            return None
+
+        return sorted(
+            candidates,
+            key=lambda r: (
+                -int(r.get("priority", 0)),
+                int(r.get("area", 0)),
+            ),
+        )[0]
+
+    def add_missing_region_at(self, x, y):
+        """
+        Click once:
+        - existing tiny region -> force a visible color number
+        - otherwise add raw outline component
+        - fallback to colored-reference island
+        - derive target color automatically
+        """
+        if self.labels is None:
+            return
+
+        existing = self._find_existing_region_covering_point(x, y)
+
+        if existing is not None:
+            existing["force_label"] = True
+
+            if self.color_bgr is not None:
+                color = self._extract_color_for_region(existing)
+                if color is not None:
+                    existing["target_color"] = color
+                    if self.palette:
+                        existing["suggested_color_id"] = self._nearest_palette_id(color)
+
+            self.selected_region_ids = {existing["id"]}
+            self._update_counts()
+            self.refresh_preview()
+
+            self.status_var.set(
+                f"Region {existing['id']} übernommen. "
+                f"Farb-ID {existing.get('suggested_color_id') or 'noch nicht bestimmt'}."
+            )
+            return
+
+        component = self._raw_component_at(x, y)
+        source = "Outline"
+
+        if component is None:
+            component = self._color_component_at(x, y)
+            source = "Farbvorlage"
+
+        if component is None:
+            self.status_var.set(
+                "An dieser Stelle konnte keine geeignete Fläche ermittelt werden."
+            )
+            return
+
+        next_id = max([r["id"] for r in self.regions], default=0) + 1
+
+        new_region = {
+            "id": next_id,
+            "source_label": None,
+            "area": int(component["area"]),
+            "bbox": component["bbox"],
+            "centroid": component["centroid"],
+            "points": component["points"],
+            "active": True,
+            "target_color": None,
+            "suggested_color_id": component.get("suggested_color_id"),
+            "parent_id": None,
+            "is_overlay": False,
+            "is_micro": True,
+            "is_recovered": source == "Farbvorlage",
+            "is_manual": True,
+            "force_label": True,
+            "priority": 3,
+            "mask": component["mask"].copy(),
+        }
+
+        if self.color_bgr is not None:
+            color = self._representative_color(
+                self.color_bgr[new_region["mask"]]
+            )
+            if color is not None:
+                new_region["target_color"] = color
+                if self.palette:
+                    new_region["suggested_color_id"] = self._nearest_palette_id(color)
+
+        self.regions.append(new_region)
+        self.selected_region_ids = {next_id}
+
+        self._update_counts()
+        self.refresh_preview()
+
+        self.status_var.set(
+            f"Manuelle Region {next_id} aus {source} hinzugefügt, "
+            f"{new_region['area']} px, "
+            f"Farb-ID {new_region.get('suggested_color_id') or 'noch nicht bestimmt'}."
+        )
+
     # ------------------------------------------------------------------
     # Mouse editing
     # ------------------------------------------------------------------
@@ -2253,6 +2511,10 @@ class ColoringRegionExtractor(tk.Tk):
         h, w = self.labels.shape
 
         if not (0 <= x < w and 0 <= y < h):
+            return
+
+        if self.mode_var.get() == "manual_add":
+            self.add_missing_region_at(x, y)
             return
 
         if self.mode_var.get() == "label":
@@ -2875,6 +3137,7 @@ class ColoringRegionExtractor(tk.Tk):
             if not (
                 saved.get("is_overlay", False)
                 or saved.get("is_recovered", False)
+                or saved.get("is_manual", False)
             ):
                 continue
 
@@ -2904,6 +3167,8 @@ class ColoringRegionExtractor(tk.Tk):
                 "is_overlay": bool(saved.get("is_overlay", True)),
                 "is_micro": bool(saved.get("is_micro", False)),
                 "is_recovered": bool(saved.get("is_recovered", False)),
+                "is_manual": bool(saved.get("is_manual", False)),
+                "force_label": bool(saved.get("force_label", False)),
                 "priority": int(saved.get("priority", 1)),
                 "mask": mask.astype(bool),
             })
@@ -3005,6 +3270,8 @@ class ColoringRegionExtractor(tk.Tk):
                     "is_overlay": bool(region.get("is_overlay", False)),
                     "is_micro": bool(region.get("is_micro", False)),
                     "is_recovered": bool(region.get("is_recovered", False)),
+                    "is_manual": bool(region.get("is_manual", False)),
+                    "force_label": bool(region.get("force_label", False)),
                     "priority": int(region.get("priority", 0)),
                 }
                 for region in self.regions
@@ -3126,6 +3393,8 @@ class ColoringRegionExtractor(tk.Tk):
                         f'data-region-id="{region["id"]}" '
                         f'data-priority="{int(region.get("priority", 0))}" '
                         f'data-recovered="{1 if region.get("is_recovered", False) else 0}" '
+                    f'data-manual="{1 if region.get("is_manual", False) else 0}" '
+                        f'data-manual="{1 if region.get("is_manual", False) else 0}" '
                         f'data-parent-id="{region.get("parent_id") if region.get("parent_id") is not None else ""}" '
                         f'd="{d}" fill="{color_hex}" stroke="none"/>'
                     )
@@ -3175,6 +3444,7 @@ class ColoringRegionExtractor(tk.Tk):
                     f'data-region-id="{region["id"]}" '
                     f'data-priority="{int(region.get("priority", 0))}" '
                     f'data-recovered="{1 if region.get("is_recovered", False) else 0}" '
+                    f'data-manual="{1 if region.get("is_manual", False) else 0}" '
                     f'data-parent-id="{region.get("parent_id") if region.get("parent_id") is not None else ""}" '
                     f'd="{d}" fill="{color_hex}" stroke="none"/>'
                 )
@@ -3285,6 +3555,8 @@ class ColoringRegionExtractor(tk.Tk):
                     "is_overlay": bool(region.get("is_overlay", False)),
                     "is_micro": bool(region.get("is_micro", False)),
                     "is_recovered": bool(region.get("is_recovered", False)),
+                    "is_manual": bool(region.get("is_manual", False)),
+                    "force_label": bool(region.get("force_label", False)),
                     "priority": int(region.get("priority", 0)),
                 }
                 for region in self.regions
