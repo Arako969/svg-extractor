@@ -3436,6 +3436,66 @@ class ColoringRegionExtractor(tk.Tk):
 
         return " ".join(subpaths)
 
+
+    def _svg_fill_points_with_outline_bleed(self, region, bleed_px=2):
+        """
+        Build visual-only SVG fill geometry with a small bleed into black
+        outline pixels. The gameplay mask and JSON geometry stay unchanged.
+
+        Expansion is constrained to the original region plus the detected
+        line mask, so the fill can hide raster/vector seams beneath black
+        outlines without bleeding into neighboring color interiors.
+        """
+        points = region.get("points", [])
+
+        if bleed_px <= 0 or self.line_mask is None:
+            return points
+
+        mask = self._region_mask(region)
+        if mask is None:
+            return points
+
+        src = mask.astype(np.uint8) * 255
+        radius = max(1, int(bleed_px))
+        size = radius * 2 + 1
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (size, size),
+        )
+
+        expanded = cv2.dilate(src, kernel, iterations=1) > 0
+        line_pixels = self.line_mask > 0
+
+        # Only allow visual expansion into pixels belonging to the black
+        # outline. This prevents the bleed from entering neighboring fills.
+        visual_mask = np.logical_and(
+            expanded,
+            np.logical_or(mask, line_pixels),
+        )
+
+        contour_img = visual_mask.astype(np.uint8) * 255
+        contours, _ = cv2.findContours(
+            contour_img,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE,
+        )
+
+        if not contours:
+            return points
+
+        contour = max(contours, key=cv2.contourArea)
+        approx = cv2.approxPolyDP(
+            contour,
+            float(self.simplify_var.get()),
+            True,
+        )
+
+        bleed_points = approx.reshape(-1, 2)
+        if len(bleed_points) < 3:
+            return points
+
+        return bleed_points.tolist()
+
     # ------------------------------------------------------------------
     # Export
     # ------------------------------------------------------------------
@@ -3525,11 +3585,12 @@ class ColoringRegionExtractor(tk.Tk):
             for region in active_regions:
                 exported.add(region["id"])
 
+                svg_points = self._svg_fill_points_with_outline_bleed(region)
                 d = (
                     "M "
                     + " ".join(
                         f"{float(x):.2f},{float(y):.2f}"
-                        for x, y in region["points"]
+                        for x, y in svg_points
                     )
                     + " Z"
                 )
@@ -3553,11 +3614,12 @@ class ColoringRegionExtractor(tk.Tk):
             if not region["active"] or region["id"] in exported:
                 continue
 
+            svg_points = self._svg_fill_points_with_outline_bleed(region)
             d = (
                 "M "
                 + " ".join(
                     f"{float(x):.2f},{float(y):.2f}"
-                    for x, y in region["points"]
+                    for x, y in svg_points
                 )
                 + " Z"
             )
