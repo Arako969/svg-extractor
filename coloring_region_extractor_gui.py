@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
 """
-Coloring Region Extractor v4
+Coloring Region Extractor v5
 
-New in v4:
-- One logical group = one game area
-- One label position per group
-- Set label position by clicking in the image
-- Highlight ungrouped active regions
-- Save/load project JSON
-- Export game SVG, game JSON, and outline PNG
-- Group color IDs and names
+Features:
+- Automatic closed-region detection
+- Resizable split interface with scrollable controls
+- Adjustable left panel width by dragging the divider
 - Multi-selection with Shift + click
+- Logical groups / game areas
+- One label position per group
+- Project save/load
+- Game SVG / JSON / transparent outline export
+- Optional colored reference image
+- Automatic representative color extraction
+- Automatic palette clustering
+- Automatic color-ID assignment to groups and regions
+- Preview with detected target colors
 
 Requirements:
     pip install opencv-python pillow numpy
 
 Run:
-    python3 coloring_region_extractor_gui_v4.py
+    python3 coloring_region_extractor_gui_v5.py
 """
 
 from __future__ import annotations
@@ -35,28 +40,45 @@ class ColoringRegionExtractor(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("Coloring Region Extractor v4")
-        self.geometry("1540x930")
-        self.minsize(1150, 760)
+        self.title("Coloring Region Extractor v5")
+        self.geometry("1720x980")
+        self.minsize(1050, 700)
+        self.resizable(True, True)
 
+        # Files / images
         self.image_path: Path | None = None
+        self.color_image_path: Path | None = None
         self.original_bgr: np.ndarray | None = None
+        self.color_bgr: np.ndarray | None = None
         self.gray: np.ndarray | None = None
 
+        # Analysis
         self.line_mask: np.ndarray | None = None
         self.labels: np.ndarray | None = None
         self.regions: list[dict] = []
 
+        # Editing
         self.selected_region_ids: set[int] = set()
         self.groups: dict[int, dict] = {}
         self.next_group_id = 1
 
+        # Palette
+        self.palette: list[dict] = []
+        self.palette_size_var = tk.IntVar(value=12)
+        self.ignore_dark_var = tk.BooleanVar(value=True)
+        self.ignore_light_var = tk.BooleanVar(value=True)
+        self.dark_threshold_var = tk.IntVar(value=45)
+        self.light_threshold_var = tk.IntVar(value=245)
+        self.use_real_colors_var = tk.BooleanVar(value=True)
+
+        # Preview
         self.preview_photo: ImageTk.PhotoImage | None = None
         self.preview_rgb: np.ndarray | None = None
         self.display_scale = 1.0
         self.display_offset_x = 0
         self.display_offset_y = 0
 
+        # Region parameters
         self.threshold_var = tk.IntVar(value=190)
         self.close_size_var = tk.IntVar(value=3)
         self.min_area_var = tk.IntVar(value=100)
@@ -67,12 +89,14 @@ class ColoringRegionExtractor(tk.Tk):
         self.show_inactive_var = tk.BooleanVar(value=True)
         self.highlight_ungrouped_var = tk.BooleanVar(value=True)
 
+        # Group editor
         self.color_id_var = tk.IntVar(value=1)
         self.group_name_var = tk.StringVar(value="")
-
         self.mode_var = tk.StringVar(value="select")
 
-        self.status_var = tk.StringVar(value="Bitte ein Bild öffnen.")
+        # Text
+        self.status_var = tk.StringVar(value="Bitte ein Outline-Bild öffnen.")
+        self.color_file_var = tk.StringVar(value="Keine Farbvorlage geladen")
         self.region_count_var = tk.StringVar(value="Regionen: 0")
         self.active_count_var = tk.StringVar(value="Aktiv: 0")
         self.selected_count_var = tk.StringVar(value="Ausgewählt: 0")
@@ -81,131 +105,445 @@ class ColoringRegionExtractor(tk.Tk):
 
         self._build_ui()
 
+    # ------------------------------------------------------------------
+    # UI
+    # ------------------------------------------------------------------
+
     def _build_ui(self):
-        root = ttk.Frame(self, padding=10)
-        root.pack(fill="both", expand=True)
+        # PanedWindow makes the left side width adjustable by drag.
+        paned = ttk.Panedwindow(self, orient="horizontal")
+        paned.pack(fill="both", expand=True)
 
-        left = ttk.Frame(root, width=350)
-        left.pack(side="left", fill="y", padx=(0, 10))
+        left_holder = ttk.Frame(paned)
+        right = ttk.Frame(paned)
 
-        right = ttk.Frame(root)
-        right.pack(side="right", fill="both", expand=True)
+        paned.add(left_holder, weight=0)
+        paned.add(right, weight=1)
+
+        # Scrollable left control panel.
+        self.left_canvas = tk.Canvas(
+            left_holder,
+            width=420,
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        left_scroll = ttk.Scrollbar(
+            left_holder,
+            orient="vertical",
+            command=self.left_canvas.yview,
+        )
+        self.left_canvas.configure(yscrollcommand=left_scroll.set)
+
+        left_scroll.pack(side="right", fill="y")
+        self.left_canvas.pack(side="left", fill="both", expand=True)
+
+        left = ttk.Frame(self.left_canvas, padding=12)
+        self.left_window = self.left_canvas.create_window(
+            (0, 0), window=left, anchor="nw"
+        )
+
+        left.bind(
+            "<Configure>",
+            lambda _e: self.left_canvas.configure(
+                scrollregion=self.left_canvas.bbox("all")
+            ),
+        )
+        self.left_canvas.bind(
+            "<Configure>",
+            lambda e: self.left_canvas.itemconfigure(
+                self.left_window, width=e.width
+            ),
+        )
+
+        # macOS mouse wheel / trackpad support
+        self.left_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.left_canvas.bind_all("<Button-4>", lambda _e: self.left_canvas.yview_scroll(-1, "units"))
+        self.left_canvas.bind_all("<Button-5>", lambda _e: self.left_canvas.yview_scroll(1, "units"))
 
         ttk.Label(
             left,
             text="Coloring Region Extractor",
-            font=("Helvetica", 17, "bold"),
-        ).pack(anchor="w", pady=(0, 8))
+            font=("Helvetica", 18, "bold"),
+        ).pack(anchor="w", pady=(0, 10))
 
-        top_buttons = ttk.Frame(left)
-        top_buttons.pack(fill="x")
-        ttk.Button(top_buttons, text="Bild öffnen", command=self.open_image).pack(side="left", fill="x", expand=True, padx=(0,3))
-        ttk.Button(top_buttons, text="Projekt laden", command=self.load_project).pack(side="left", fill="x", expand=True, padx=(3,0))
+        file_buttons = ttk.Frame(left)
+        file_buttons.pack(fill="x")
 
-        ttk.Button(left, text="Projekt speichern", command=self.save_project).pack(fill="x", pady=(6,2))
-        ttk.Button(left, text="Neu analysieren", command=self.analyze).pack(fill="x", pady=2)
+        ttk.Button(
+            file_buttons,
+            text="Outline öffnen",
+            command=self.open_image,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+        ttk.Button(
+            file_buttons,
+            text="Farbvorlage laden",
+            command=self.open_color_image,
+        ).pack(side="left", fill="x", expand=True, padx=(4, 0))
+
+        ttk.Label(
+            left,
+            textvariable=self.color_file_var,
+            wraplength=390,
+        ).pack(anchor="w", pady=(5, 4))
+
+        project_buttons = ttk.Frame(left)
+        project_buttons.pack(fill="x")
+        ttk.Button(
+            project_buttons,
+            text="Projekt laden",
+            command=self.load_project,
+        ).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ttk.Button(
+            project_buttons,
+            text="Projekt speichern",
+            command=self.save_project,
+        ).pack(side="left", fill="x", expand=True, padx=(4, 0))
+
+        ttk.Button(
+            left,
+            text="Neu analysieren",
+            command=self.analyze,
+        ).pack(fill="x", pady=(6, 2))
 
         ttk.Separator(left).pack(fill="x", pady=10)
+
+        # Region analysis
+        ttk.Label(
+            left,
+            text="Regionserkennung",
+            font=("Helvetica", 13, "bold"),
+        ).pack(anchor="w")
 
         self._add_slider(left, "Schwarz/Weiß-Schwelle", self.threshold_var, 50, 245)
         self._add_slider(left, "Lücken schließen", self.close_size_var, 1, 15)
         self._add_slider(left, "Min. Flächengröße", self.min_area_var, 10, 5000)
         self._add_slider(left, "Pfad-Vereinfachung", self.simplify_var, 0.2, 8.0, is_float=True)
 
-        ttk.Checkbutton(left, text="Bildrand als Grenze verwenden", variable=self.include_border_var).pack(anchor="w", pady=2)
-        ttk.Checkbutton(left, text="Regions-/Farbnummern anzeigen", variable=self.show_numbers_var, command=self.refresh_preview).pack(anchor="w", pady=2)
-        ttk.Checkbutton(left, text="Deaktivierte Regionen anzeigen", variable=self.show_inactive_var, command=self.refresh_preview).pack(anchor="w", pady=2)
-        ttk.Checkbutton(left, text="Ungegruppierte Regionen markieren", variable=self.highlight_ungrouped_var, command=self.refresh_preview).pack(anchor="w", pady=2)
+        ttk.Checkbutton(
+            left,
+            text="Bildrand als Grenze verwenden",
+            variable=self.include_border_var,
+        ).pack(anchor="w", pady=2)
+
+        ttk.Checkbutton(
+            left,
+            text="Regions-/Farbnummern anzeigen",
+            variable=self.show_numbers_var,
+            command=self.refresh_preview,
+        ).pack(anchor="w", pady=2)
+
+        ttk.Checkbutton(
+            left,
+            text="Deaktivierte Regionen anzeigen",
+            variable=self.show_inactive_var,
+            command=self.refresh_preview,
+        ).pack(anchor="w", pady=2)
+
+        ttk.Checkbutton(
+            left,
+            text="Ungegruppierte Regionen markieren",
+            variable=self.highlight_ungrouped_var,
+            command=self.refresh_preview,
+        ).pack(anchor="w", pady=2)
 
         ttk.Separator(left).pack(fill="x", pady=10)
 
         stats = ttk.Frame(left)
         stats.pack(fill="x")
         ttk.Label(stats, textvariable=self.region_count_var).grid(row=0, column=0, sticky="w")
-        ttk.Label(stats, textvariable=self.active_count_var).grid(row=0, column=1, sticky="w", padx=(12,0))
+        ttk.Label(stats, textvariable=self.active_count_var).grid(row=0, column=1, sticky="w", padx=(18, 0))
         ttk.Label(stats, textvariable=self.selected_count_var).grid(row=1, column=0, sticky="w")
-        ttk.Label(stats, textvariable=self.group_count_var).grid(row=1, column=1, sticky="w", padx=(12,0))
+        ttk.Label(stats, textvariable=self.group_count_var).grid(row=1, column=1, sticky="w", padx=(18, 0))
         ttk.Label(stats, textvariable=self.ungrouped_count_var).grid(row=2, column=0, columnspan=2, sticky="w")
 
         ttk.Separator(left).pack(fill="x", pady=10)
 
-        ttk.Label(left, text="Werkzeug", font=("Helvetica", 13, "bold")).pack(anchor="w")
+        # Color analysis
+        ttk.Label(
+            left,
+            text="Farbanalyse",
+            font=("Helvetica", 13, "bold"),
+        ).pack(anchor="w")
+
+        row = ttk.Frame(left)
+        row.pack(fill="x", pady=(6, 2))
+        ttk.Label(row, text="Palette").pack(side="left")
+        ttk.Spinbox(
+            row,
+            from_=2,
+            to=50,
+            textvariable=self.palette_size_var,
+            width=8,
+        ).pack(side="right")
+
+        ttk.Checkbutton(
+            left,
+            text="Sehr dunkle Pixel ignorieren",
+            variable=self.ignore_dark_var,
+        ).pack(anchor="w", pady=2)
+
+        self._add_slider(
+            left,
+            "Dunkel-Grenzwert",
+            self.dark_threshold_var,
+            0,
+            120,
+        )
+
+        ttk.Checkbutton(
+            left,
+            text="Sehr helle Pixel ignorieren",
+            variable=self.ignore_light_var,
+        ).pack(anchor="w", pady=2)
+
+        self._add_slider(
+            left,
+            "Hell-Grenzwert",
+            self.light_threshold_var,
+            150,
+            255,
+        )
+
+        ttk.Checkbutton(
+            left,
+            text="Erkannte Zielfarben in Vorschau",
+            variable=self.use_real_colors_var,
+            command=self.refresh_preview,
+        ).pack(anchor="w", pady=2)
+
+        ttk.Button(
+            left,
+            text="Farben automatisch analysieren",
+            command=self.analyze_colors,
+        ).pack(fill="x", pady=(6, 4))
+
+        ttk.Label(left, text="Erkannte Palette").pack(anchor="w", pady=(4, 2))
+
+        self.palette_canvas = tk.Canvas(
+            left,
+            height=76,
+            bg="#eeeeee",
+            highlightthickness=1,
+            highlightbackground="#888888",
+        )
+        self.palette_canvas.pack(fill="x", pady=(0, 4))
+
+        ttk.Separator(left).pack(fill="x", pady=10)
+
+        # Selection
+        ttk.Label(
+            left,
+            text="Auswahl und Game Areas",
+            font=("Helvetica", 13, "bold"),
+        ).pack(anchor="w")
 
         modes = ttk.Frame(left)
-        modes.pack(fill="x", pady=(4,6))
-        ttk.Radiobutton(modes, text="Auswahl", value="select", variable=self.mode_var, command=self.refresh_preview).pack(side="left")
-        ttk.Radiobutton(modes, text="Label setzen", value="label", variable=self.mode_var, command=self.refresh_preview).pack(side="left", padx=(10,0))
+        modes.pack(fill="x", pady=(4, 6))
+
+        ttk.Radiobutton(
+            modes,
+            text="Auswahl",
+            value="select",
+            variable=self.mode_var,
+        ).pack(side="left")
+
+        ttk.Radiobutton(
+            modes,
+            text="Label setzen",
+            value="label",
+            variable=self.mode_var,
+        ).pack(side="left", padx=(12, 0))
 
         ttk.Label(
             left,
             text=(
-                "Auswahl: Klick wählt eine Region.\n"
-                "Shift + Klick erweitert oder entfernt die Auswahl.\n"
-                "Label setzen: Gruppe wählen und ins Bild klicken."
+                "Klick: eine Region auswählen\n"
+                "Shift + Klick: Auswahl erweitern/entfernen\n"
+                "Label setzen: Gruppe wählen und ins Bild klicken"
             ),
             justify="left",
-        ).pack(anchor="w", pady=(0,8))
+        ).pack(anchor="w", pady=(0, 7))
 
-        ttk.Button(left, text="Auswahl löschen", command=self.clear_selection).pack(fill="x", pady=2)
-
-        ttk.Separator(left).pack(fill="x", pady=10)
-
-        ttk.Label(left, text="Gruppe / Game Area", font=("Helvetica", 13, "bold")).pack(anchor="w")
+        ttk.Button(
+            left,
+            text="Auswahl löschen",
+            command=self.clear_selection,
+        ).pack(fill="x", pady=2)
 
         row = ttk.Frame(left)
-        row.pack(fill="x", pady=(5,2))
-        ttk.Label(row, text="Name").pack(side="left")
-        ttk.Entry(row, textvariable=self.group_name_var).pack(side="right", fill="x", expand=True, padx=(8,0))
+        row.pack(fill="x", pady=(7, 2))
+
+        ttk.Label(row, text="Gruppenname").pack(side="left")
+        ttk.Entry(
+            row,
+            textvariable=self.group_name_var,
+        ).pack(side="right", fill="x", expand=True, padx=(10, 0))
 
         row = ttk.Frame(left)
         row.pack(fill="x", pady=2)
+
         ttk.Label(row, text="Farb-ID").pack(side="left")
-        ttk.Spinbox(row, from_=1, to=999, textvariable=self.color_id_var, width=8).pack(side="right")
+        ttk.Spinbox(
+            row,
+            from_=1,
+            to=999,
+            textvariable=self.color_id_var,
+            width=8,
+        ).pack(side="right")
 
-        ttk.Button(left, text="Gruppe aus Auswahl erstellen", command=self.create_group).pack(fill="x", pady=(5,2))
-        ttk.Button(left, text="Auswahl zur gewählten Gruppe", command=self.add_selection_to_group).pack(fill="x", pady=2)
-        ttk.Button(left, text="Auswahl aus Gruppen entfernen", command=self.remove_selection_from_groups).pack(fill="x", pady=2)
+        ttk.Button(
+            left,
+            text="Gruppe aus Auswahl erstellen",
+            command=self.create_group,
+        ).pack(fill="x", pady=(6, 2))
 
-        ttk.Label(left, text="Gruppen").pack(anchor="w", pady=(8,3))
+        ttk.Button(
+            left,
+            text="Auswahl zur gewählten Gruppe",
+            command=self.add_selection_to_group,
+        ).pack(fill="x", pady=2)
+
+        ttk.Button(
+            left,
+            text="Auswahl aus Gruppen entfernen",
+            command=self.remove_selection_from_groups,
+        ).pack(fill="x", pady=2)
+
+        ttk.Label(left, text="Gruppen").pack(anchor="w", pady=(8, 3))
 
         list_frame = ttk.Frame(left)
-        list_frame.pack(fill="x")
+        list_frame.pack(fill="both")
 
-        self.group_list = tk.Listbox(list_frame, height=8, exportselection=False)
+        self.group_list = tk.Listbox(
+            list_frame,
+            height=11,
+            exportselection=False,
+        )
         self.group_list.pack(side="left", fill="both", expand=True)
-        scroll = ttk.Scrollbar(list_frame, orient="vertical", command=self.group_list.yview)
-        scroll.pack(side="right", fill="y")
-        self.group_list.configure(yscrollcommand=scroll.set)
+
+        group_scroll = ttk.Scrollbar(
+            list_frame,
+            orient="vertical",
+            command=self.group_list.yview,
+        )
+        group_scroll.pack(side="right", fill="y")
+        self.group_list.configure(yscrollcommand=group_scroll.set)
         self.group_list.bind("<<ListboxSelect>>", self.on_group_selected)
 
-        ttk.Button(left, text="Gewählte Gruppe aktualisieren", command=self.update_selected_group).pack(fill="x", pady=(4,2))
-        ttk.Button(left, text="Label automatisch zentrieren", command=self.auto_center_group_label).pack(fill="x", pady=2)
-        ttk.Button(left, text="Gewählte Gruppe löschen", command=self.delete_selected_group).pack(fill="x", pady=2)
+        ttk.Button(
+            left,
+            text="Gewählte Gruppe aktualisieren",
+            command=self.update_selected_group,
+        ).pack(fill="x", pady=(5, 2))
+
+        ttk.Button(
+            left,
+            text="Farbe der Gruppe aus Vorlage neu bestimmen",
+            command=self.analyze_selected_group_color,
+        ).pack(fill="x", pady=2)
+
+        ttk.Button(
+            left,
+            text="Label automatisch zentrieren",
+            command=self.auto_center_group_label,
+        ).pack(fill="x", pady=2)
+
+        ttk.Button(
+            left,
+            text="Gewählte Gruppe löschen",
+            command=self.delete_selected_group,
+        ).pack(fill="x", pady=2)
 
         ttk.Separator(left).pack(fill="x", pady=10)
 
-        ttk.Button(left, text="Auswahl aktivieren", command=lambda: self.set_selection_active(True)).pack(fill="x", pady=2)
-        ttk.Button(left, text="Auswahl deaktivieren", command=lambda: self.set_selection_active(False)).pack(fill="x", pady=2)
-        ttk.Button(left, text="Alle aktivieren", command=self.activate_all).pack(fill="x", pady=2)
+        ttk.Button(
+            left,
+            text="Auswahl aktivieren",
+            command=lambda: self.set_selection_active(True),
+        ).pack(fill="x", pady=2)
+
+        ttk.Button(
+            left,
+            text="Auswahl deaktivieren",
+            command=lambda: self.set_selection_active(False),
+        ).pack(fill="x", pady=2)
+
+        ttk.Button(
+            left,
+            text="Alle aktivieren",
+            command=self.activate_all,
+        ).pack(fill="x", pady=2)
 
         ttk.Separator(left).pack(fill="x", pady=10)
 
-        ttk.Button(left, text="Game SVG exportieren", command=self.export_svg).pack(fill="x", pady=2)
-        ttk.Button(left, text="Game JSON exportieren", command=self.export_game_json).pack(fill="x", pady=2)
-        ttk.Button(left, text="Outline PNG exportieren", command=self.export_outline_png).pack(fill="x", pady=2)
-        ttk.Button(left, text="Vorschau speichern", command=self.export_preview).pack(fill="x", pady=2)
+        ttk.Label(
+            left,
+            text="Export",
+            font=("Helvetica", 13, "bold"),
+        ).pack(anchor="w")
 
-        ttk.Label(left, textvariable=self.status_var, wraplength=330, justify="left").pack(anchor="w", pady=(10,0))
+        ttk.Button(
+            left,
+            text="Game SVG exportieren",
+            command=self.export_svg,
+        ).pack(fill="x", pady=(5, 2))
 
+        ttk.Button(
+            left,
+            text="Game JSON exportieren",
+            command=self.export_game_json,
+        ).pack(fill="x", pady=2)
+
+        ttk.Button(
+            left,
+            text="Outline PNG exportieren",
+            command=self.export_outline_png,
+        ).pack(fill="x", pady=2)
+
+        ttk.Button(
+            left,
+            text="Vorschau speichern",
+            command=self.export_preview,
+        ).pack(fill="x", pady=2)
+
+        ttk.Label(
+            left,
+            textvariable=self.status_var,
+            wraplength=390,
+            justify="left",
+        ).pack(anchor="w", pady=(12, 20))
+
+        # Right image preview
         self.canvas = tk.Canvas(
             right,
-            bg="#2b2b2b",
+            bg="#292929",
             highlightthickness=0,
             cursor="hand2",
         )
         self.canvas.pack(fill="both", expand=True)
         self.canvas.bind("<Button-1>", self.on_canvas_click)
         self.canvas.bind("<Configure>", lambda _e: self.refresh_preview())
+
+        self.after(200, lambda: self._set_initial_sash(paned))
+
+    def _set_initial_sash(self, paned):
+        try:
+            paned.sashpos(0, 440)
+        except Exception:
+            pass
+
+    def _on_mousewheel(self, event):
+        # Only scroll left panel if pointer is over it.
+        try:
+            widget = self.winfo_containing(event.x_root, event.y_root)
+            while widget:
+                if widget == self.left_canvas:
+                    self.left_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+                    return
+                widget = widget.master
+        except Exception:
+            pass
 
     def _add_slider(self, parent, label, variable, minimum, maximum, is_float=False):
         frame = ttk.Frame(parent)
@@ -214,30 +552,41 @@ class ColoringRegionExtractor(tk.Tk):
         header = ttk.Frame(frame)
         header.pack(fill="x")
         ttk.Label(header, text=label).pack(side="left")
+
         value_label = ttk.Label(header, width=8, anchor="e")
         value_label.pack(side="right")
 
-        ttk.Scale(frame, from_=minimum, to=maximum, variable=variable, orient="horizontal").pack(fill="x")
+        ttk.Scale(
+            frame,
+            from_=minimum,
+            to=maximum,
+            variable=variable,
+            orient="horizontal",
+        ).pack(fill="x")
 
         def update(*_):
             if is_float:
-                value_label.config(text=f"{float(variable.get()):.1f}")
+                value_label.configure(text=f"{float(variable.get()):.1f}")
             else:
-                value = int(round(variable.get()))
+                val = int(round(variable.get()))
                 if variable is self.close_size_var:
-                    if value < 1:
-                        value = 1
-                    if value % 2 == 0:
-                        value += 1
-                    variable.set(value)
-                value_label.config(text=str(value))
+                    if val < 1:
+                        val = 1
+                    if val % 2 == 0:
+                        val += 1
+                    variable.set(val)
+                value_label.configure(text=str(val))
 
         variable.trace_add("write", update)
         update()
 
+    # ------------------------------------------------------------------
+    # Loading
+    # ------------------------------------------------------------------
+
     def open_image(self):
         path = filedialog.askopenfilename(
-            title="Coloring-Bild öffnen",
+            title="Outline-Bild öffnen",
             filetypes=[
                 ("Bilder", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff"),
                 ("Alle Dateien", "*.*"),
@@ -248,7 +597,7 @@ class ColoringRegionExtractor(tk.Tk):
 
         bgr = cv2.imread(path)
         if bgr is None:
-            messagebox.showerror("Fehler", "Bild konnte nicht geladen werden.")
+            messagebox.showerror("Fehler", "Das Outline-Bild konnte nicht geladen werden.")
             return
 
         self.image_path = Path(path)
@@ -256,13 +605,60 @@ class ColoringRegionExtractor(tk.Tk):
         self.gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
 
         self.groups.clear()
+        self.regions.clear()
         self.selected_region_ids.clear()
         self.next_group_id = 1
+        self.palette.clear()
+
         self.analyze()
+
+    def open_color_image(self):
+        if self.original_bgr is None:
+            messagebox.showinfo("Hinweis", "Bitte zuerst das Outline-Bild öffnen.")
+            return
+
+        path = filedialog.askopenfilename(
+            title="Kolorierte Farbvorlage öffnen",
+            filetypes=[
+                ("Bilder", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff"),
+                ("Alle Dateien", "*.*"),
+            ],
+        )
+        if not path:
+            return
+
+        bgr = cv2.imread(path)
+        if bgr is None:
+            messagebox.showerror("Fehler", "Die Farbvorlage konnte nicht geladen werden.")
+            return
+
+        target_h, target_w = self.original_bgr.shape[:2]
+
+        if bgr.shape[:2] != (target_h, target_w):
+            bgr = cv2.resize(
+                bgr,
+                (target_w, target_h),
+                interpolation=cv2.INTER_AREA,
+            )
+            self.status_var.set(
+                "Farbvorlage hatte eine andere Auflösung und wurde auf die Outline-Größe skaliert. "
+                "Für genaue Ergebnisse sollten beide Bilder deckungsgleich sein."
+            )
+
+        self.color_image_path = Path(path)
+        self.color_bgr = bgr
+        self.color_file_var.set(f"Farbvorlage: {self.color_image_path.name}")
+
+        if self.regions:
+            self.analyze_colors()
+
+    # ------------------------------------------------------------------
+    # Region detection
+    # ------------------------------------------------------------------
 
     def analyze(self):
         if self.gray is None:
-            messagebox.showinfo("Hinweis", "Bitte zuerst ein Bild öffnen.")
+            messagebox.showinfo("Hinweis", "Bitte zuerst ein Outline-Bild öffnen.")
             return
 
         threshold = int(self.threshold_var.get())
@@ -279,7 +675,10 @@ class ColoringRegionExtractor(tk.Tk):
         line = (self.gray < threshold).astype(np.uint8) * 255
 
         if close_size > 1:
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_size, close_size))
+            kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                (close_size, close_size),
+            )
             line = cv2.morphologyEx(line, cv2.MORPH_CLOSE, kernel)
 
         self.line_mask = line
@@ -287,38 +686,60 @@ class ColoringRegionExtractor(tk.Tk):
         white = cv2.bitwise_not(line)
         binary = (white > 0).astype(np.uint8)
 
-        count, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
+        count, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            binary,
+            connectivity=8,
+        )
         self.labels = labels
 
         border_labels = set(
-            np.unique(np.concatenate([
-                labels[0, :],
-                labels[-1, :],
-                labels[:, 0],
-                labels[:, -1],
-            ])).tolist()
+            np.unique(
+                np.concatenate(
+                    [
+                        labels[0, :],
+                        labels[-1, :],
+                        labels[:, 0],
+                        labels[:, -1],
+                    ]
+                )
+            ).tolist()
         )
 
-        old_active = {r["source_label"]: r.get("active", True) for r in self.regions}
+        old_active = {
+            r["source_label"]: r.get("active", True)
+            for r in self.regions
+        }
+
         regions = []
 
         for label_id in range(1, count):
             area = int(stats[label_id, cv2.CC_STAT_AREA])
+
             if area < min_area:
                 continue
+
             if (not self.include_border_var.get()) and label_id in border_labels:
                 continue
 
             mask = np.zeros_like(binary, dtype=np.uint8)
             mask[labels == label_id] = 255
 
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            contours, _ = cv2.findContours(
+                mask,
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
             if not contours:
                 continue
 
             contour = max(contours, key=cv2.contourArea)
-            approx = cv2.approxPolyDP(contour, simplify, True)
+            approx = cv2.approxPolyDP(
+                contour,
+                simplify,
+                True,
+            )
             pts = approx.reshape(-1, 2)
+
             if len(pts) < 3:
                 continue
 
@@ -327,28 +748,336 @@ class ColoringRegionExtractor(tk.Tk):
             w = int(stats[label_id, cv2.CC_STAT_WIDTH])
             h = int(stats[label_id, cv2.CC_STAT_HEIGHT])
 
-            regions.append({
-                "source_label": label_id,
-                "area": area,
-                "bbox": [x, y, w, h],
-                "centroid": [float(centroids[label_id][0]), float(centroids[label_id][1])],
-                "points": pts.tolist(),
-                "active": old_active.get(label_id, True),
-            })
+            regions.append(
+                {
+                    "source_label": label_id,
+                    "area": area,
+                    "bbox": [x, y, w, h],
+                    "centroid": [
+                        float(centroids[label_id][0]),
+                        float(centroids[label_id][1]),
+                    ],
+                    "points": pts.tolist(),
+                    "active": old_active.get(label_id, True),
+                    "target_color": None,
+                    "suggested_color_id": None,
+                }
+            )
 
         regions.sort(key=lambda r: r["area"], reverse=True)
+
         for idx, region in enumerate(regions, start=1):
             region["id"] = idx
 
         self.regions = regions
+
+        # Re-analysis invalidates groups because region IDs may change.
         self.groups.clear()
         self.next_group_id = 1
         self.selected_region_ids.clear()
+        self.palette.clear()
 
         self._refresh_group_list()
+        self._draw_palette()
         self._update_counts()
         self.refresh_preview()
-        self.status_var.set(f"Analyse abgeschlossen: {len(regions)} Regionen erkannt.")
+
+        self.status_var.set(
+            f"Analyse abgeschlossen: {len(regions)} Regionen erkannt."
+        )
+
+        if self.color_bgr is not None:
+            self.analyze_colors()
+
+    # ------------------------------------------------------------------
+    # Color extraction / clustering
+    # ------------------------------------------------------------------
+
+    def analyze_colors(self):
+        if self.color_bgr is None:
+            messagebox.showinfo(
+                "Hinweis",
+                "Bitte zuerst eine kolorierte Farbvorlage laden.",
+            )
+            return
+
+        if self.labels is None or not self.regions:
+            messagebox.showinfo(
+                "Hinweis",
+                "Bitte zuerst Regionen analysieren.",
+            )
+            return
+
+        usable_colors = []
+
+        for region in self.regions:
+            color = self._extract_color_for_region(region)
+            region["target_color"] = color
+            if color is not None and region["active"]:
+                usable_colors.append(color)
+
+        # Groups use all pixels from all member regions.
+        for group in self.groups.values():
+            group_color = self._extract_color_for_group(group)
+            group["target_color"] = group_color
+            if group_color is not None:
+                usable_colors.append(group_color)
+
+        if not usable_colors:
+            messagebox.showwarning(
+                "Farbanalyse",
+                "Es konnten keine brauchbaren Farben aus der Vorlage gelesen werden.",
+            )
+            return
+
+        self.palette = self._cluster_palette(
+            usable_colors,
+            max(2, int(self.palette_size_var.get())),
+        )
+
+        # Assign nearest palette entry to every region.
+        for region in self.regions:
+            if region.get("target_color") is not None:
+                region["suggested_color_id"] = self._nearest_palette_id(
+                    region["target_color"]
+                )
+
+        # Assign nearest palette entry to every group and set actual color ID.
+        for group in self.groups.values():
+            group_color = group.get("target_color")
+            if group_color is None:
+                group_color = self._extract_color_for_group(group)
+                group["target_color"] = group_color
+
+            if group_color is not None:
+                group["color_id"] = self._nearest_palette_id(group_color)
+
+        self._refresh_group_list()
+        self._draw_palette()
+        self.refresh_preview()
+
+        self.status_var.set(
+            f"Farbanalyse abgeschlossen. {len(self.palette)} Palettenfarben erzeugt."
+        )
+
+    def _filtered_color_pixels(self, pixels_bgr):
+        if pixels_bgr is None or len(pixels_bgr) == 0:
+            return pixels_bgr
+
+        pixels = pixels_bgr.astype(np.uint8)
+
+        # Convert to HSV for brightness filtering.
+        hsv = cv2.cvtColor(
+            pixels.reshape(-1, 1, 3),
+            cv2.COLOR_BGR2HSV,
+        ).reshape(-1, 3)
+
+        value = hsv[:, 2]
+        keep = np.ones(len(pixels), dtype=bool)
+
+        if self.ignore_dark_var.get():
+            keep &= value > int(self.dark_threshold_var.get())
+
+        if self.ignore_light_var.get():
+            keep &= value < int(self.light_threshold_var.get())
+
+        filtered = pixels[keep]
+
+        # If filtering was too aggressive, fall back to all non-dark pixels.
+        if len(filtered) < 10:
+            fallback = pixels[value > 20]
+            if len(fallback) >= 5:
+                filtered = fallback
+
+        return filtered
+
+    def _representative_color(self, pixels_bgr):
+        pixels = self._filtered_color_pixels(pixels_bgr)
+
+        if pixels is None or len(pixels) == 0:
+            return None
+
+        # Median is robust against outlines, gradients, highlights and noise.
+        median_bgr = np.median(
+            pixels.astype(np.float32),
+            axis=0,
+        )
+
+        b, g, r = [int(round(x)) for x in median_bgr]
+        return [r, g, b]
+
+    def _extract_color_for_region(self, region):
+        if self.color_bgr is None or self.labels is None:
+            return None
+
+        mask = self.labels == region["source_label"]
+        pixels = self.color_bgr[mask]
+
+        return self._representative_color(pixels)
+
+    def _extract_color_for_group(self, group):
+        if self.color_bgr is None or self.labels is None:
+            return None
+
+        masks = []
+
+        for rid in group["region_ids"]:
+            region = self._region_by_id(rid)
+            if region and region["active"]:
+                masks.append(self.labels == region["source_label"])
+
+        if not masks:
+            return None
+
+        combined = np.logical_or.reduce(masks)
+        pixels = self.color_bgr[combined]
+
+        return self._representative_color(pixels)
+
+    def _cluster_palette(self, rgb_colors, requested_k):
+        arr_rgb = np.array(rgb_colors, dtype=np.uint8)
+
+        # Lab gives more visually meaningful clustering than raw RGB.
+        arr_bgr = arr_rgb[:, ::-1]
+        lab = cv2.cvtColor(
+            arr_bgr.reshape(-1, 1, 3),
+            cv2.COLOR_BGR2LAB,
+        ).reshape(-1, 3).astype(np.float32)
+
+        k = min(requested_k, len(lab))
+        k = max(1, k)
+
+        criteria = (
+            cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER,
+            100,
+            0.2,
+        )
+
+        _compactness, labels, centers_lab = cv2.kmeans(
+            lab,
+            k,
+            None,
+            criteria,
+            10,
+            cv2.KMEANS_PP_CENTERS,
+        )
+
+        # Convert Lab centers back to RGB.
+        centers_lab_u8 = np.clip(
+            centers_lab,
+            0,
+            255,
+        ).astype(np.uint8).reshape(-1, 1, 3)
+
+        centers_bgr = cv2.cvtColor(
+            centers_lab_u8,
+            cv2.COLOR_LAB2BGR,
+        ).reshape(-1, 3)
+
+        centers_rgb = centers_bgr[:, ::-1]
+
+        # Sort by hue-ish order for stable / pleasant palette numbering.
+        hsv = cv2.cvtColor(
+            centers_bgr.reshape(-1, 1, 3),
+            cv2.COLOR_BGR2HSV,
+        ).reshape(-1, 3)
+
+        order = sorted(
+            range(k),
+            key=lambda i: (
+                int(hsv[i][0]),
+                -int(hsv[i][1]),
+                -int(hsv[i][2]),
+            ),
+        )
+
+        palette = []
+
+        for new_id, old_idx in enumerate(order, start=1):
+            rgb = [int(v) for v in centers_rgb[old_idx]]
+            palette.append(
+                {
+                    "id": new_id,
+                    "rgb": rgb,
+                    "hex": self._rgb_to_hex(rgb),
+                }
+            )
+
+        return palette
+
+    def _nearest_palette_id(self, rgb):
+        if not self.palette:
+            return None
+
+        color = np.array(rgb, dtype=np.uint8).reshape(1, 1, 3)
+        bgr = color[:, :, ::-1]
+        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).reshape(3).astype(np.float32)
+
+        best_id = None
+        best_distance = None
+
+        for entry in self.palette:
+            p = np.array(entry["rgb"], dtype=np.uint8).reshape(1, 1, 3)
+            p_lab = cv2.cvtColor(
+                p[:, :, ::-1],
+                cv2.COLOR_BGR2LAB,
+            ).reshape(3).astype(np.float32)
+
+            dist = float(np.linalg.norm(lab - p_lab))
+
+            if best_distance is None or dist < best_distance:
+                best_distance = dist
+                best_id = entry["id"]
+
+        return best_id
+
+    def _draw_palette(self):
+        c = self.palette_canvas
+        c.delete("all")
+
+        width = max(c.winfo_width(), 360)
+        height = max(c.winfo_height(), 70)
+
+        if not self.palette:
+            c.create_text(
+                width / 2,
+                height / 2,
+                text="Noch keine Palette analysiert",
+                fill="#555555",
+            )
+            return
+
+        swatch_w = max(26, int(width / max(1, len(self.palette))))
+        x = 4
+
+        for entry in self.palette:
+            rgb = entry["rgb"]
+            fill = self._rgb_to_hex(rgb)
+
+            c.create_rectangle(
+                x,
+                8,
+                min(width - 2, x + swatch_w - 4),
+                46,
+                fill=fill,
+                outline="#444444",
+            )
+
+            c.create_text(
+                x + (swatch_w - 4) / 2,
+                58,
+                text=str(entry["id"]),
+                fill="#222222",
+            )
+
+            x += swatch_w
+
+            if x >= width:
+                break
+
+    # ------------------------------------------------------------------
+    # Helpers / groups
+    # ------------------------------------------------------------------
 
     def _region_by_id(self, rid):
         for region in self.regions:
@@ -364,9 +1093,12 @@ class ColoringRegionExtractor(tk.Tk):
 
     def _selected_group_id(self):
         selection = self.group_list.curselection()
+
         if not selection:
             return None
+
         text = self.group_list.get(selection[0])
+
         try:
             return int(text.split("|")[0].strip())
         except Exception:
@@ -374,10 +1106,17 @@ class ColoringRegionExtractor(tk.Tk):
 
     def _update_counts(self):
         active = sum(1 for r in self.regions if r["active"])
+
         grouped = set()
-        for g in self.groups.values():
-            grouped |= set(g["region_ids"])
-        ungrouped = sum(1 for r in self.regions if r["active"] and r["id"] not in grouped)
+
+        for group in self.groups.values():
+            grouped |= set(group["region_ids"])
+
+        ungrouped = sum(
+            1
+            for r in self.regions
+            if r["active"] and r["id"] not in grouped
+        )
 
         self.region_count_var.set(f"Regionen: {len(self.regions)}")
         self.active_count_var.set(f"Aktiv: {active}")
@@ -386,96 +1125,211 @@ class ColoringRegionExtractor(tk.Tk):
         self.ungrouped_count_var.set(f"Ungegruppiert: {ungrouped}")
 
     @staticmethod
-    def _palette_color(index):
+    def _fallback_color(index):
         palette = [
-            (246,189,96),(132,165,157),(242,132,130),(108,138,228),
-            (184,199,122),(167,139,250),(100,181,166),(233,163,193),
-            (230,194,41),(127,176,105),(244,162,97),(141,153,174),
-            (92,201,160),(198,134,66),(115,133,213),
+            (246, 189, 96),
+            (132, 165, 157),
+            (242, 132, 130),
+            (108, 138, 228),
+            (184, 199, 122),
+            (167, 139, 250),
+            (100, 181, 166),
+            (233, 163, 193),
+            (230, 194, 41),
+            (127, 176, 105),
+            (244, 162, 97),
+            (141, 153, 174),
         ]
         return palette[index % len(palette)]
+
+    def _palette_rgb(self, color_id):
+        for entry in self.palette:
+            if entry["id"] == color_id:
+                return tuple(entry["rgb"])
+
+        return None
+
+    @staticmethod
+    def _rgb_to_hex(rgb):
+        return "#{:02X}{:02X}{:02X}".format(
+            int(rgb[0]),
+            int(rgb[1]),
+            int(rgb[2]),
+        )
+
+    # ------------------------------------------------------------------
+    # Preview
+    # ------------------------------------------------------------------
 
     def make_preview(self):
         if self.labels is None or self.line_mask is None:
             return None
 
         h, w = self.labels.shape
-        preview = np.full((h, w, 3), 255, np.uint8)
+        preview = np.full((h, w, 3), 255, dtype=np.uint8)
 
         grouped_ids = set()
-        for g in self.groups.values():
-            grouped_ids |= set(g["region_ids"])
+
+        for group in self.groups.values():
+            grouped_ids |= set(group["region_ids"])
 
         for region in self.regions:
             mask = self.labels == region["source_label"]
 
             if not region["active"]:
                 if self.show_inactive_var.get():
-                    preview[mask] = (232,232,232)
+                    preview[mask] = (232, 232, 232)
                 continue
 
             group = self._group_for_region(region["id"])
-            if group:
-                color = self._palette_color(group["color_id"] - 1)
-            else:
-                color = self._palette_color(region["id"] - 1)
 
-            preview[mask] = np.array(color, dtype=np.uint8)
+            rgb = None
 
-            if self.highlight_ungrouped_var.get() and region["id"] not in grouped_ids:
+            if self.use_real_colors_var.get():
+                if group:
+                    if group.get("color_id"):
+                        rgb = self._palette_rgb(group["color_id"])
+                    if rgb is None:
+                        rgb = group.get("target_color")
+                else:
+                    sid = region.get("suggested_color_id")
+                    if sid:
+                        rgb = self._palette_rgb(sid)
+                    if rgb is None:
+                        rgb = region.get("target_color")
+
+            if rgb is None:
+                if group:
+                    rgb = self._fallback_color(group["color_id"] - 1)
+                else:
+                    rgb = self._fallback_color(region["id"] - 1)
+
+            preview[mask] = np.array(rgb, dtype=np.uint8)
+
+            if (
+                self.highlight_ungrouped_var.get()
+                and region["id"] not in grouped_ids
+            ):
                 contours, _ = cv2.findContours(
                     mask.astype(np.uint8) * 255,
                     cv2.RETR_EXTERNAL,
                     cv2.CHAIN_APPROX_SIMPLE,
                 )
-                cv2.drawContours(preview, contours, -1, (255, 90, 0), 2)
+                cv2.drawContours(
+                    preview,
+                    contours,
+                    -1,
+                    (255, 90, 0),
+                    2,
+                )
 
-        preview[self.line_mask > 0] = (25,25,25)
+        preview[self.line_mask > 0] = (25, 25, 25)
 
-        # Selection highlight
+        # Selected regions
         for rid in self.selected_region_ids:
             region = self._region_by_id(rid)
+
             if not region:
                 continue
-            mask = (self.labels == region["source_label"]).astype(np.uint8) * 255
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(preview, contours, -1, (255,0,255), 4)
+
+            mask = (
+                self.labels == region["source_label"]
+            ).astype(np.uint8) * 255
+
+            contours, _ = cv2.findContours(
+                mask,
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
+
+            cv2.drawContours(
+                preview,
+                contours,
+                -1,
+                (255, 0, 255),
+                4,
+            )
 
         if self.show_numbers_var.get():
-            # Ungrouped active regions show technical region IDs
+            # Technical IDs / suggested IDs for ungrouped regions
             for region in self.regions:
                 if not region["active"]:
                     continue
                 if self._group_for_region(region["id"]):
                     continue
-                if region["area"] < max(500, int(self.min_area_var.get()) * 2):
+                if region["area"] < max(
+                    500,
+                    int(self.min_area_var.get()) * 2,
+                ):
                     continue
-                self._draw_number(preview, region["centroid"], str(region["id"]))
 
-            # One number per group, at label_position
+                text = str(
+                    region.get("suggested_color_id")
+                    or region["id"]
+                )
+
+                self._draw_number(
+                    preview,
+                    region["centroid"],
+                    text,
+                )
+
+            # One number per logical group
             for group in self.groups.values():
                 if not group["region_ids"]:
                     continue
+
                 pos = group.get("label_position")
+
                 if pos is None:
                     pos = self._calculate_group_center(group)
+
                 if pos is not None:
-                    self._draw_number(preview, pos, str(group["color_id"]), radius=15)
+                    self._draw_number(
+                        preview,
+                        pos,
+                        str(group["color_id"]),
+                        radius=15,
+                    )
 
         return preview
 
     def _draw_number(self, img, pos, text, radius=13):
         cx, cy = map(int, pos)
-        cv2.circle(img, (cx,cy), radius, (255,255,255), -1)
-        cv2.circle(img, (cx,cy), radius, (30,30,30), 1)
-        ts = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)[0]
+
+        cv2.circle(
+            img,
+            (cx, cy),
+            radius,
+            (255, 255, 255),
+            -1,
+        )
+
+        cv2.circle(
+            img,
+            (cx, cy),
+            radius,
+            (30, 30, 30),
+            1,
+        )
+
+        ts = cv2.getTextSize(
+            text,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            1,
+        )[0]
+
         cv2.putText(
             img,
             text,
-            (cx-ts[0]//2, cy+ts[1]//2),
+            (
+                cx - ts[0] // 2,
+                cy + ts[1] // 2,
+            ),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.45,
-            (25,25,25),
+            (25, 25, 25),
             1,
             cv2.LINE_AA,
         )
@@ -483,16 +1337,22 @@ class ColoringRegionExtractor(tk.Tk):
     def _calculate_group_center(self, group):
         weighted = []
         total = 0
+
         for rid in group["region_ids"]:
             region = self._region_by_id(rid)
+
             if not region or not region["active"]:
                 continue
+
             area = region["area"]
             cx, cy = region["centroid"]
+
             weighted.append((cx * area, cy * area))
             total += area
+
         if total <= 0:
             return None
+
         return [
             sum(v[0] for v in weighted) / total,
             sum(v[1] for v in weighted) / total,
@@ -500,24 +1360,39 @@ class ColoringRegionExtractor(tk.Tk):
 
     def refresh_preview(self):
         preview = self.make_preview()
+
         if preview is None:
             self.canvas.delete("all")
             return
 
         self.preview_rgb = preview
+
         canvas_w = max(1, self.canvas.winfo_width())
         canvas_h = max(1, self.canvas.winfo_height())
-        h, w = preview.shape[:2]
-        scale = max(0.01, min(canvas_w/w, canvas_h/h))
-        dw = max(1, int(w*scale))
-        dh = max(1, int(h*scale))
 
-        pil = Image.fromarray(preview).resize((dw,dh), Image.Resampling.LANCZOS)
+        h, w = preview.shape[:2]
+
+        scale = max(
+            0.01,
+            min(
+                canvas_w / w,
+                canvas_h / h,
+            ),
+        )
+
+        display_w = max(1, int(w * scale))
+        display_h = max(1, int(h * scale))
+
+        pil = Image.fromarray(preview).resize(
+            (display_w, display_h),
+            Image.Resampling.LANCZOS,
+        )
+
         self.preview_photo = ImageTk.PhotoImage(pil)
 
         self.display_scale = scale
-        self.display_offset_x = (canvas_w-dw)//2
-        self.display_offset_y = (canvas_h-dh)//2
+        self.display_offset_x = (canvas_w - display_w) // 2
+        self.display_offset_y = (canvas_h - display_h) // 2
 
         self.canvas.delete("all")
         self.canvas.create_image(
@@ -527,29 +1402,54 @@ class ColoringRegionExtractor(tk.Tk):
             anchor="nw",
         )
 
+    # ------------------------------------------------------------------
+    # Mouse editing
+    # ------------------------------------------------------------------
+
     def on_canvas_click(self, event):
         if self.labels is None:
             return
 
-        x = int((event.x-self.display_offset_x)/self.display_scale)
-        y = int((event.y-self.display_offset_y)/self.display_scale)
+        x = int(
+            (event.x - self.display_offset_x)
+            / self.display_scale
+        )
+        y = int(
+            (event.y - self.display_offset_y)
+            / self.display_scale
+        )
 
         h, w = self.labels.shape
+
         if not (0 <= x < w and 0 <= y < h):
             return
 
         if self.mode_var.get() == "label":
             gid = self._selected_group_id()
+
             if gid is None or gid not in self.groups:
-                messagebox.showinfo("Hinweis", "Bitte zuerst eine Gruppe in der Liste auswählen.")
+                messagebox.showinfo(
+                    "Hinweis",
+                    "Bitte zuerst eine Gruppe in der Liste auswählen.",
+                )
                 return
-            self.groups[gid]["label_position"] = [float(x), float(y)]
-            self.status_var.set(f"Label-Position für Gruppe {gid} gesetzt.")
+
+            self.groups[gid]["label_position"] = [
+                float(x),
+                float(y),
+            ]
+
+            self.status_var.set(
+                f"Label-Position für Gruppe {gid} gesetzt."
+            )
+
             self.refresh_preview()
             return
 
         source_label = int(self.labels[y, x])
+
         clicked = None
+
         for region in self.regions:
             if region["source_label"] == source_label:
                 clicked = region
@@ -574,15 +1474,27 @@ class ColoringRegionExtractor(tk.Tk):
             self.selected_region_ids = {rid}
 
         group = self._group_for_region(rid)
+
         if group:
             self.status_var.set(
-                f"Region {rid} ausgewählt. Gruppe {group['id']} / Farb-ID {group['color_id']}."
+                f"Region {rid}: Gruppe {group['id']}, Farb-ID {group['color_id']}."
             )
         else:
-            self.status_var.set(f"Region {rid} ausgewählt.")
+            suggested = clicked.get("suggested_color_id")
+            extra = (
+                f", vorgeschlagene Farb-ID {suggested}"
+                if suggested else ""
+            )
+            self.status_var.set(
+                f"Region {rid} ausgewählt{extra}."
+            )
 
         self._update_counts()
         self.refresh_preview()
+
+    # ------------------------------------------------------------------
+    # Group editing
+    # ------------------------------------------------------------------
 
     def clear_selection(self):
         self.selected_region_ids.clear()
@@ -591,7 +1503,10 @@ class ColoringRegionExtractor(tk.Tk):
 
     def create_group(self):
         if not self.selected_region_ids:
-            messagebox.showinfo("Hinweis", "Bitte zuerst Regionen auswählen.")
+            messagebox.showinfo(
+                "Hinweis",
+                "Bitte zuerst Regionen auswählen.",
+            )
             return
 
         self.remove_selection_from_groups(refresh=False)
@@ -599,8 +1514,33 @@ class ColoringRegionExtractor(tk.Tk):
         gid = self.next_group_id
         self.next_group_id += 1
 
-        name = self.group_name_var.get().strip() or f"Gruppe {gid}"
-        color_id = max(1, int(self.color_id_var.get()))
+        name = (
+            self.group_name_var.get().strip()
+            or f"Gruppe {gid}"
+        )
+
+        selected_regions = [
+            self._region_by_id(rid)
+            for rid in self.selected_region_ids
+        ]
+
+        # Prefer automatic color if available.
+        automatic_ids = [
+            r.get("suggested_color_id")
+            for r in selected_regions
+            if r and r.get("suggested_color_id")
+        ]
+
+        if automatic_ids:
+            color_id = max(
+                set(automatic_ids),
+                key=automatic_ids.count,
+            )
+        else:
+            color_id = max(
+                1,
+                int(self.color_id_var.get()),
+            )
 
         group = {
             "id": gid,
@@ -608,26 +1548,46 @@ class ColoringRegionExtractor(tk.Tk):
             "color_id": color_id,
             "region_ids": set(self.selected_region_ids),
             "label_position": None,
+            "target_color": None,
         }
+
         group["label_position"] = self._calculate_group_center(group)
 
-        self.groups[gid] = group
+        if self.color_bgr is not None:
+            group["target_color"] = self._extract_color_for_group(group)
 
+            if self.palette and group["target_color"] is not None:
+                group["color_id"] = self._nearest_palette_id(
+                    group["target_color"]
+                )
+
+        self.groups[gid] = group
+        self.color_id_var.set(group["color_id"])
         self.group_name_var.set("")
+
         self._refresh_group_list(gid)
         self._update_counts()
         self.refresh_preview()
+
         self.status_var.set(
-            f"{name} erstellt: {len(group['region_ids'])} Regionen, Farb-ID {color_id}."
+            f"{name} erstellt: {len(group['region_ids'])} Regionen, Farb-ID {group['color_id']}."
         )
 
     def add_selection_to_group(self):
         gid = self._selected_group_id()
+
         if gid is None or gid not in self.groups:
-            messagebox.showinfo("Hinweis", "Bitte zuerst eine Zielgruppe auswählen.")
+            messagebox.showinfo(
+                "Hinweis",
+                "Bitte zuerst eine Zielgruppe auswählen.",
+            )
             return
+
         if not self.selected_region_ids:
-            messagebox.showinfo("Hinweis", "Bitte Regionen auswählen.")
+            messagebox.showinfo(
+                "Hinweis",
+                "Bitte Regionen auswählen.",
+            )
             return
 
         for other_gid, group in self.groups.items():
@@ -636,12 +1596,25 @@ class ColoringRegionExtractor(tk.Tk):
 
         self.groups[gid]["region_ids"] |= self.selected_region_ids
         self._remove_empty_groups()
-        self.groups[gid]["label_position"] = self._calculate_group_center(self.groups[gid])
+
+        group = self.groups[gid]
+        group["label_position"] = self._calculate_group_center(group)
+
+        if self.color_bgr is not None:
+            group["target_color"] = self._extract_color_for_group(group)
+
+            if self.palette and group["target_color"] is not None:
+                group["color_id"] = self._nearest_palette_id(
+                    group["target_color"]
+                )
 
         self._refresh_group_list(gid)
         self._update_counts()
         self.refresh_preview()
-        self.status_var.set("Regionen zur Gruppe hinzugefügt.")
+
+        self.status_var.set(
+            "Regionen zur Gruppe hinzugefügt."
+        )
 
     def remove_selection_from_groups(self, refresh=True):
         if not self.selected_region_ids:
@@ -656,58 +1629,158 @@ class ColoringRegionExtractor(tk.Tk):
             self._refresh_group_list()
             self._update_counts()
             self.refresh_preview()
-            self.status_var.set("Regionen aus Gruppen entfernt.")
+
+            self.status_var.set(
+                "Regionen aus Gruppen entfernt."
+            )
 
     def update_selected_group(self):
         gid = self._selected_group_id()
+
         if gid is None or gid not in self.groups:
-            messagebox.showinfo("Hinweis", "Bitte zuerst eine Gruppe auswählen.")
+            messagebox.showinfo(
+                "Hinweis",
+                "Bitte zuerst eine Gruppe auswählen.",
+            )
             return
 
         group = self.groups[gid]
-        group["name"] = self.group_name_var.get().strip() or group["name"]
-        group["color_id"] = max(1, int(self.color_id_var.get()))
+
+        group["name"] = (
+            self.group_name_var.get().strip()
+            or group["name"]
+        )
+
+        group["color_id"] = max(
+            1,
+            int(self.color_id_var.get()),
+        )
+
+        # Update target color to chosen palette color where possible.
+        palette_rgb = self._palette_rgb(group["color_id"])
+
+        if palette_rgb is not None:
+            group["target_color"] = list(palette_rgb)
 
         self._refresh_group_list(gid)
         self.refresh_preview()
-        self.status_var.set(f"Gruppe {gid} aktualisiert.")
+
+        self.status_var.set(
+            f"Gruppe {gid} aktualisiert."
+        )
+
+    def analyze_selected_group_color(self):
+        gid = self._selected_group_id()
+
+        if gid is None or gid not in self.groups:
+            messagebox.showinfo(
+                "Hinweis",
+                "Bitte zuerst eine Gruppe auswählen.",
+            )
+            return
+
+        if self.color_bgr is None:
+            messagebox.showinfo(
+                "Hinweis",
+                "Bitte zuerst eine Farbvorlage laden.",
+            )
+            return
+
+        group = self.groups[gid]
+        color = self._extract_color_for_group(group)
+
+        if color is None:
+            messagebox.showwarning(
+                "Farbanalyse",
+                "Für diese Gruppe konnte keine brauchbare Farbe bestimmt werden.",
+            )
+            return
+
+        group["target_color"] = color
+
+        if self.palette:
+            group["color_id"] = self._nearest_palette_id(color)
+
+        self.color_id_var.set(group["color_id"])
+        self._refresh_group_list(gid)
+        self.refresh_preview()
+
+        self.status_var.set(
+            f"Farbe für Gruppe {gid} neu analysiert."
+        )
 
     def auto_center_group_label(self):
         gid = self._selected_group_id()
+
         if gid is None or gid not in self.groups:
-            messagebox.showinfo("Hinweis", "Bitte zuerst eine Gruppe auswählen.")
+            messagebox.showinfo(
+                "Hinweis",
+                "Bitte zuerst eine Gruppe auswählen.",
+            )
             return
 
-        self.groups[gid]["label_position"] = self._calculate_group_center(self.groups[gid])
+        self.groups[gid]["label_position"] = (
+            self._calculate_group_center(
+                self.groups[gid]
+            )
+        )
+
         self.refresh_preview()
-        self.status_var.set(f"Label von Gruppe {gid} automatisch zentriert.")
+
+        self.status_var.set(
+            f"Label von Gruppe {gid} automatisch zentriert."
+        )
 
     def delete_selected_group(self):
         gid = self._selected_group_id()
+
         if gid is None or gid not in self.groups:
             return
+
         name = self.groups[gid]["name"]
+
         del self.groups[gid]
         self.selected_region_ids.clear()
+
         self._refresh_group_list()
         self._update_counts()
         self.refresh_preview()
-        self.status_var.set(f"{name} gelöscht.")
+
+        self.status_var.set(
+            f"{name} gelöscht."
+        )
 
     def _remove_empty_groups(self):
-        for gid in [gid for gid, g in self.groups.items() if not g["region_ids"]]:
+        for gid in [
+            gid
+            for gid, group in self.groups.items()
+            if not group["region_ids"]
+        ]:
             del self.groups[gid]
 
     def _refresh_group_list(self, select_group_id=None):
         self.group_list.delete(0, tk.END)
+
         select_index = None
 
         for idx, gid in enumerate(sorted(self.groups)):
             group = self.groups[gid]
+
+            color_hex = ""
+
+            if group.get("target_color"):
+                color_hex = " " + self._rgb_to_hex(
+                    group["target_color"]
+                )
+
             self.group_list.insert(
                 tk.END,
-                f"{gid} | Farbe {group['color_id']} | {group['name']} | {len(group['region_ids'])} Regionen"
+                (
+                    f"{gid} | Farbe {group['color_id']}{color_hex} | "
+                    f"{group['name']} | {len(group['region_ids'])} Regionen"
+                ),
             )
+
             if gid == select_group_id:
                 select_index = idx
 
@@ -717,34 +1790,50 @@ class ColoringRegionExtractor(tk.Tk):
 
     def on_group_selected(self, _event=None):
         gid = self._selected_group_id()
+
         if gid is None or gid not in self.groups:
             return
 
         group = self.groups[gid]
+
         self.group_name_var.set(group["name"])
         self.color_id_var.set(group["color_id"])
         self.selected_region_ids = set(group["region_ids"])
+
         self._update_counts()
         self.refresh_preview()
-        self.status_var.set(f"Gruppe {gid} ausgewählt.")
+
+        self.status_var.set(
+            f"Gruppe {gid} ausgewählt."
+        )
 
     def set_selection_active(self, active):
         for rid in self.selected_region_ids:
             region = self._region_by_id(rid)
+
             if region:
                 region["active"] = active
+
         self._update_counts()
         self.refresh_preview()
 
     def activate_all(self):
         for region in self.regions:
             region["active"] = True
+
         self._update_counts()
         self.refresh_preview()
 
+    # ------------------------------------------------------------------
+    # Project save/load
+    # ------------------------------------------------------------------
+
     def save_project(self):
         if self.image_path is None or self.labels is None:
-            messagebox.showinfo("Hinweis", "Bitte zuerst ein Bild analysieren.")
+            messagebox.showinfo(
+                "Hinweis",
+                "Bitte zuerst ein Bild analysieren.",
+            )
             return
 
         path = filedialog.asksaveasfilename(
@@ -753,95 +1842,221 @@ class ColoringRegionExtractor(tk.Tk):
             initialfile=f"{self.image_path.stem}_project.json",
             filetypes=[("JSON", "*.json")],
         )
+
         if not path:
             return
 
-        data = self._project_data()
-        Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        self.status_var.set(f"Projekt gespeichert: {Path(path).name}")
+        Path(path).write_text(
+            json.dumps(
+                self._project_data(),
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        self.status_var.set(
+            f"Projekt gespeichert: {Path(path).name}"
+        )
 
     def load_project(self):
         path = filedialog.askopenfilename(
             title="Projekt laden",
             filetypes=[("JSON", "*.json")],
         )
+
         if not path:
             return
 
         try:
-            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            data = json.loads(
+                Path(path).read_text(encoding="utf-8")
+            )
         except Exception as exc:
-            messagebox.showerror("Fehler", f"Projekt konnte nicht geladen werden:\n{exc}")
+            messagebox.showerror(
+                "Fehler",
+                f"Projekt konnte nicht geladen werden:\n{exc}",
+            )
             return
 
-        image_path = Path(data.get("image_path", ""))
+        image_path = Path(
+            data.get("image_path", "")
+        )
+
         if not image_path.exists():
             chosen = filedialog.askopenfilename(
                 title="Originalbild auswählen",
-                filetypes=[("Bilder", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff")],
+                filetypes=[
+                    ("Bilder", "*.png *.jpg *.jpeg *.bmp *.tif *.tiff"),
+                ],
             )
+
             if not chosen:
                 return
+
             image_path = Path(chosen)
 
         bgr = cv2.imread(str(image_path))
+
         if bgr is None:
-            messagebox.showerror("Fehler", "Originalbild konnte nicht geladen werden.")
+            messagebox.showerror(
+                "Fehler",
+                "Originalbild konnte nicht geladen werden.",
+            )
             return
 
         self.image_path = image_path
         self.original_bgr = bgr
-        self.gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        self.gray = cv2.cvtColor(
+            bgr,
+            cv2.COLOR_BGR2GRAY,
+        )
 
         params = data.get("parameters", {})
-        self.threshold_var.set(params.get("threshold", 190))
-        self.close_size_var.set(params.get("close_size", 3))
-        self.min_area_var.set(params.get("min_area", 100))
-        self.simplify_var.set(params.get("simplify_epsilon", 1.5))
-        self.include_border_var.set(params.get("include_border_regions", True))
 
-        # Rebuild labels from the source image first.
+        self.threshold_var.set(
+            params.get("threshold", 190)
+        )
+        self.close_size_var.set(
+            params.get("close_size", 3)
+        )
+        self.min_area_var.set(
+            params.get("min_area", 100)
+        )
+        self.simplify_var.set(
+            params.get("simplify_epsilon", 1.5)
+        )
+        self.include_border_var.set(
+            params.get("include_border_regions", True)
+        )
+
+        color_params = data.get("color_parameters", {})
+        self.palette_size_var.set(
+            color_params.get("palette_size", 12)
+        )
+        self.dark_threshold_var.set(
+            color_params.get("dark_threshold", 45)
+        )
+        self.light_threshold_var.set(
+            color_params.get("light_threshold", 245)
+        )
+        self.ignore_dark_var.set(
+            color_params.get("ignore_dark", True)
+        )
+        self.ignore_light_var.set(
+            color_params.get("ignore_light", True)
+        )
+
+        # Build current region geometry.
         self.analyze()
 
-        # Restore regions by current region id. This assumes same image + same parameters.
-        saved_regions = {r["id"]: r for r in data.get("regions", [])}
+        # Restore color reference.
+        saved_color_path = data.get("color_image_path")
+
+        if saved_color_path:
+            cp = Path(saved_color_path)
+
+            if cp.exists():
+                cbgr = cv2.imread(str(cp))
+
+                if cbgr is not None:
+                    h, w = self.original_bgr.shape[:2]
+
+                    if cbgr.shape[:2] != (h, w):
+                        cbgr = cv2.resize(
+                            cbgr,
+                            (w, h),
+                            interpolation=cv2.INTER_AREA,
+                        )
+
+                    self.color_image_path = cp
+                    self.color_bgr = cbgr
+                    self.color_file_var.set(
+                        f"Farbvorlage: {cp.name}"
+                    )
+
+        saved_regions = {
+            int(r["id"]): r
+            for r in data.get("regions", [])
+        }
+
         for region in self.regions:
             saved = saved_regions.get(region["id"])
+
             if saved:
-                region["active"] = saved.get("active", True)
+                region["active"] = saved.get(
+                    "active",
+                    True,
+                )
+                region["target_color"] = saved.get(
+                    "target_color"
+                )
+                region["suggested_color_id"] = saved.get(
+                    "suggested_color_id"
+                )
+
+        self.palette = data.get(
+            "palette",
+            [],
+        )
 
         self.groups.clear()
         max_gid = 0
 
-        for g in data.get("groups", []):
-            gid = int(g["id"])
+        for saved in data.get("groups", []):
+            gid = int(saved["id"])
             max_gid = max(max_gid, gid)
+
             valid_ids = {
                 int(rid)
-                for rid in g.get("region_ids", [])
+                for rid in saved.get("region_ids", [])
                 if self._region_by_id(int(rid)) is not None
             }
+
             self.groups[gid] = {
                 "id": gid,
-                "name": g.get("name", f"Gruppe {gid}"),
-                "color_id": int(g.get("color_id", 1)),
+                "name": saved.get(
+                    "name",
+                    f"Gruppe {gid}",
+                ),
+                "color_id": int(
+                    saved.get("color_id", 1)
+                ),
                 "region_ids": valid_ids,
-                "label_position": g.get("label_position"),
+                "label_position": saved.get(
+                    "label_position"
+                ),
+                "target_color": saved.get(
+                    "target_color"
+                ),
             }
 
         self.next_group_id = max_gid + 1
         self.selected_region_ids.clear()
+
         self._remove_empty_groups()
         self._refresh_group_list()
+        self._draw_palette()
         self._update_counts()
         self.refresh_preview()
-        self.status_var.set(f"Projekt geladen: {Path(path).name}")
+
+        self.status_var.set(
+            f"Projekt geladen: {Path(path).name}"
+        )
 
     def _project_data(self):
         h, w = self.labels.shape
+
         return {
-            "format": "coloring_region_project_v1",
-            "image_path": str(self.image_path.resolve()) if self.image_path else None,
+            "format": "coloring_region_project_v2",
+            "image_path": (
+                str(self.image_path.resolve())
+                if self.image_path else None
+            ),
+            "color_image_path": (
+                str(self.color_image_path.resolve())
+                if self.color_image_path else None
+            ),
             "width": w,
             "height": h,
             "parameters": {
@@ -851,28 +2066,43 @@ class ColoringRegionExtractor(tk.Tk):
                 "simplify_epsilon": float(self.simplify_var.get()),
                 "include_border_regions": bool(self.include_border_var.get()),
             },
+            "color_parameters": {
+                "palette_size": int(self.palette_size_var.get()),
+                "ignore_dark": bool(self.ignore_dark_var.get()),
+                "ignore_light": bool(self.ignore_light_var.get()),
+                "dark_threshold": int(self.dark_threshold_var.get()),
+                "light_threshold": int(self.light_threshold_var.get()),
+            },
+            "palette": self.palette,
             "regions": [
                 {
-                    "id": r["id"],
-                    "active": r["active"],
-                    "area": r["area"],
-                    "bbox": r["bbox"],
-                    "centroid": r["centroid"],
-                    "points": r["points"],
+                    "id": region["id"],
+                    "active": region["active"],
+                    "area": region["area"],
+                    "bbox": region["bbox"],
+                    "centroid": region["centroid"],
+                    "points": region["points"],
+                    "target_color": region.get("target_color"),
+                    "suggested_color_id": region.get("suggested_color_id"),
                 }
-                for r in self.regions
+                for region in self.regions
             ],
             "groups": [
                 {
-                    "id": g["id"],
-                    "name": g["name"],
-                    "color_id": g["color_id"],
-                    "region_ids": sorted(g["region_ids"]),
-                    "label_position": g.get("label_position"),
+                    "id": group["id"],
+                    "name": group["name"],
+                    "color_id": group["color_id"],
+                    "region_ids": sorted(group["region_ids"]),
+                    "label_position": group.get("label_position"),
+                    "target_color": group.get("target_color"),
                 }
-                for _, g in sorted(self.groups.items())
+                for _, group in sorted(self.groups.items())
             ],
         }
+
+    # ------------------------------------------------------------------
+    # Export
+    # ------------------------------------------------------------------
 
     def export_svg(self):
         if self.labels is None:
@@ -881,67 +2111,164 @@ class ColoringRegionExtractor(tk.Tk):
         path = filedialog.asksaveasfilename(
             title="Game SVG exportieren",
             defaultextension=".svg",
-            initialfile=f"{self.image_path.stem}_game.svg" if self.image_path else "game.svg",
+            initialfile=(
+                f"{self.image_path.stem}_game.svg"
+                if self.image_path else "game.svg"
+            ),
             filetypes=[("SVG", "*.svg")],
         )
+
         if not path:
             return
 
         h, w = self.labels.shape
+
         parts = [
             '<?xml version="1.0" encoding="UTF-8"?>',
-            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}">',
+            (
+                f'<svg xmlns="http://www.w3.org/2000/svg" '
+                f'viewBox="0 0 {w} {h}" width="{w}" height="{h}">'
+            ),
             '<g id="game_areas">',
         ]
 
         exported = set()
 
         for gid in sorted(self.groups):
-            g = self.groups[gid]
+            group = self.groups[gid]
+
             active_regions = [
                 self._region_by_id(rid)
-                for rid in sorted(g["region_ids"])
+                for rid in sorted(group["region_ids"])
             ]
-            active_regions = [r for r in active_regions if r and r["active"]]
+
+            active_regions = [
+                region
+                for region in active_regions
+                if region and region["active"]
+            ]
+
             if not active_regions:
                 continue
 
-            safe_name = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in g["name"])
-            label_pos = g.get("label_position") or self._calculate_group_center(g)
-            lx, ly = label_pos if label_pos else (0,0)
-
-            parts.append(
-                f'<g id="group_{gid:03d}" data-group-id="{gid}" '
-                f'data-name="{safe_name}" data-color-id="{g["color_id"]}" '
-                f'data-label-x="{lx:.2f}" data-label-y="{ly:.2f}">'
+            safe_name = "".join(
+                ch if ch.isalnum() or ch in "_-" else "_"
+                for ch in group["name"]
             )
 
-            for r in active_regions:
-                exported.add(r["id"])
-                d = "M " + " ".join(f"{float(x):.2f},{float(y):.2f}" for x,y in r["points"]) + " Z"
+            label_pos = (
+                group.get("label_position")
+                or self._calculate_group_center(group)
+            )
+
+            lx, ly = (
+                label_pos
+                if label_pos else (0, 0)
+            )
+
+            rgb = (
+                self._palette_rgb(group["color_id"])
+                or group.get("target_color")
+                or (217, 217, 217)
+            )
+
+            color_hex = self._rgb_to_hex(rgb)
+
+            parts.append(
+                (
+                    f'<g id="group_{gid:03d}" '
+                    f'data-group-id="{gid}" '
+                    f'data-name="{safe_name}" '
+                    f'data-color-id="{group["color_id"]}" '
+                    f'data-color="{color_hex}" '
+                    f'data-label-x="{lx:.2f}" '
+                    f'data-label-y="{ly:.2f}">'
+                )
+            )
+
+            for region in active_regions:
+                exported.add(region["id"])
+
+                d = (
+                    "M "
+                    + " ".join(
+                        f"{float(x):.2f},{float(y):.2f}"
+                        for x, y in region["points"]
+                    )
+                    + " Z"
+                )
+
                 parts.append(
-                    f'<path id="group_{gid:03d}_region_{r["id"]:03d}" '
-                    f'data-region-id="{r["id"]}" d="{d}" fill="#d9d9d9" stroke="none"/>'
+                    (
+                        f'<path id="group_{gid:03d}_region_{region["id"]:03d}" '
+                        f'data-region-id="{region["id"]}" '
+                        f'd="{d}" fill="{color_hex}" stroke="none"/>'
+                    )
                 )
 
             parts.append("</g>")
 
-        # Active ungrouped regions also remain available.
-        for r in self.regions:
-            if not r["active"] or r["id"] in exported:
+        # Ungrouped active regions remain exportable.
+        for region in self.regions:
+            if not region["active"] or region["id"] in exported:
                 continue
-            d = "M " + " ".join(f"{float(x):.2f},{float(y):.2f}" for x,y in r["points"]) + " Z"
-            parts.append(
-                f'<g id="region_group_{r["id"]:03d}" data-group-id="region_{r["id"]:03d}" data-color-id="0">'
+
+            d = (
+                "M "
+                + " ".join(
+                    f"{float(x):.2f},{float(y):.2f}"
+                    for x, y in region["points"]
+                )
+                + " Z"
             )
-            parts.append(
-                f'<path id="region_{r["id"]:03d}" data-region-id="{r["id"]}" d="{d}" fill="#d9d9d9" stroke="none"/>'
+
+            color_id = (
+                region.get("suggested_color_id")
+                or 0
             )
+
+            rgb = (
+                self._palette_rgb(color_id)
+                or region.get("target_color")
+                or (217, 217, 217)
+            )
+
+            color_hex = self._rgb_to_hex(rgb)
+
+            parts.append(
+                (
+                    f'<g id="region_group_{region["id"]:03d}" '
+                    f'data-group-id="region_{region["id"]:03d}" '
+                    f'data-color-id="{color_id}" '
+                    f'data-color="{color_hex}">'
+                )
+            )
+
+            parts.append(
+                (
+                    f'<path id="region_{region["id"]:03d}" '
+                    f'data-region-id="{region["id"]}" '
+                    f'd="{d}" fill="{color_hex}" stroke="none"/>'
+                )
+            )
+
             parts.append("</g>")
 
-        parts.extend(["</g>", "</svg>"])
-        Path(path).write_text("\n".join(parts), encoding="utf-8")
-        self.status_var.set(f"Game SVG gespeichert: {Path(path).name}")
+        parts.extend(
+            [
+                "</g>",
+                "</svg>",
+            ]
+        )
+
+        Path(path).write_text(
+            "\n".join(parts),
+            encoding="utf-8",
+        )
+
+        self.status_var.set(
+            f"Game SVG gespeichert: {Path(path).name}"
+        )
 
     def export_game_json(self):
         if self.labels is None:
@@ -950,9 +2277,13 @@ class ColoringRegionExtractor(tk.Tk):
         path = filedialog.asksaveasfilename(
             title="Game JSON exportieren",
             defaultextension=".json",
-            initialfile=f"{self.image_path.stem}_game.json" if self.image_path else "game.json",
+            initialfile=(
+                f"{self.image_path.stem}_game.json"
+                if self.image_path else "game.json"
+            ),
             filetypes=[("JSON", "*.json")],
         )
+
         if not path:
             return
 
@@ -962,40 +2293,87 @@ class ColoringRegionExtractor(tk.Tk):
         grouped_ids = set()
 
         for gid in sorted(self.groups):
-            g = self.groups[gid]
+            group = self.groups[gid]
+
             active_ids = [
-                rid for rid in sorted(g["region_ids"])
-                if (self._region_by_id(rid) and self._region_by_id(rid)["active"])
+                rid
+                for rid in sorted(group["region_ids"])
+                if (
+                    self._region_by_id(rid)
+                    and self._region_by_id(rid)["active"]
+                )
             ]
+
             if not active_ids:
                 continue
 
             grouped_ids |= set(active_ids)
-            label_pos = g.get("label_position") or self._calculate_group_center(g)
 
-            game_areas.append({
-                "id": gid,
-                "name": g["name"],
-                "color_id": g["color_id"],
-                "region_ids": active_ids,
-                "label_position": label_pos,
-            })
+            label_pos = (
+                group.get("label_position")
+                or self._calculate_group_center(group)
+            )
+
+            rgb = (
+                self._palette_rgb(group["color_id"])
+                or group.get("target_color")
+            )
+
+            game_areas.append(
+                {
+                    "id": gid,
+                    "name": group["name"],
+                    "color_id": group["color_id"],
+                    "target_color": rgb,
+                    "target_color_hex": (
+                        self._rgb_to_hex(rgb)
+                        if rgb is not None else None
+                    ),
+                    "region_ids": active_ids,
+                    "label_position": label_pos,
+                }
+            )
 
         data = {
-            "format": "coloring_game_export_v1",
-            "source": self.image_path.name if self.image_path else None,
+            "format": "coloring_game_export_v2",
+            "source": (
+                self.image_path.name
+                if self.image_path else None
+            ),
+            "color_reference": (
+                self.color_image_path.name
+                if self.color_image_path else None
+            ),
             "width": w,
             "height": h,
+            "palette": self.palette,
             "game_areas": game_areas,
             "ungrouped_active_regions": [
-                r["id"]
-                for r in self.regions
-                if r["active"] and r["id"] not in grouped_ids
+                {
+                    "region_id": region["id"],
+                    "color_id": region.get("suggested_color_id"),
+                    "target_color": region.get("target_color"),
+                }
+                for region in self.regions
+                if (
+                    region["active"]
+                    and region["id"] not in grouped_ids
+                )
             ],
         }
 
-        Path(path).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        self.status_var.set(f"Game JSON gespeichert: {Path(path).name}")
+        Path(path).write_text(
+            json.dumps(
+                data,
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        self.status_var.set(
+            f"Game JSON gespeichert: {Path(path).name}"
+        )
 
     def export_outline_png(self):
         if self.line_mask is None:
@@ -1004,36 +2382,61 @@ class ColoringRegionExtractor(tk.Tk):
         path = filedialog.asksaveasfilename(
             title="Outline PNG exportieren",
             defaultextension=".png",
-            initialfile=f"{self.image_path.stem}_outline.png" if self.image_path else "outline.png",
+            initialfile=(
+                f"{self.image_path.stem}_outline.png"
+                if self.image_path else "outline.png"
+            ),
             filetypes=[("PNG", "*.png")],
         )
+
         if not path:
             return
 
-        # RGBA: black linework, transparent background
         h, w = self.line_mask.shape
-        rgba = np.zeros((h,w,4), dtype=np.uint8)
+
+        rgba = np.zeros(
+            (h, w, 4),
+            dtype=np.uint8,
+        )
+
         rgba[..., :3] = 0
         rgba[..., 3] = self.line_mask
-        Image.fromarray(rgba, mode="RGBA").save(path)
-        self.status_var.set(f"Outline PNG gespeichert: {Path(path).name}")
+
+        Image.fromarray(
+            rgba,
+            mode="RGBA",
+        ).save(path)
+
+        self.status_var.set(
+            f"Outline PNG gespeichert: {Path(path).name}"
+        )
 
     def export_preview(self):
         preview = self.make_preview()
+
         if preview is None:
             return
 
         path = filedialog.asksaveasfilename(
             title="Vorschau speichern",
             defaultextension=".png",
-            initialfile=f"{self.image_path.stem}_preview.png" if self.image_path else "preview.png",
+            initialfile=(
+                f"{self.image_path.stem}_preview.png"
+                if self.image_path else "preview.png"
+            ),
             filetypes=[("PNG", "*.png")],
         )
+
         if not path:
             return
 
-        Image.fromarray(preview).save(path)
-        self.status_var.set(f"Vorschau gespeichert: {Path(path).name}")
+        Image.fromarray(
+            preview,
+        ).save(path)
+
+        self.status_var.set(
+            f"Vorschau gespeichert: {Path(path).name}"
+        )
 
 
 if __name__ == "__main__":
