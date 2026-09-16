@@ -1095,7 +1095,28 @@ feature/godot-importer
 
 ---
 
-# 18. Kurzfazit
+# 18. Repository- und Tooling-Setup (Stand 2026-09-16)
+
+## GitHub
+
+Repository: `https://github.com/Arako969/svg-extractor.git`
+
+Die komplette Versionshistorie `v0.1.0` bis `v0.10.0` wurde nachträglich als einzelne Commits mit passenden Git-Tags abgebildet, sodass jeder Entwicklungsschritt aus `CHANGELOG.md` einem eigenen Commit entspricht.
+
+`Grafik Library/` (Quell-Artwork, PNGs) sowie `.DS_Store` sind über `.gitignore` bewusst vom Repository ausgeschlossen.
+
+## Start ohne Terminal
+
+`Coloring Region Extractor.command` ist ein macOS-Finder-Launcher: prüft Python 3 und die benötigten Pakete, bietet bei fehlenden Paketen die automatische Installation über `requirements.txt` an und startet danach `coloring_region_extractor_gui.py`.
+
+## Kontext für KI-Unterstützung
+
+- `CLAUDE.md`: Architektur- und Befehlsüberblick für Claude Code, damit ein neuer Chat/Agent sich schnell zurechtfindet, ohne den Quellcode komplett neu zu erschließen.
+- `DEVELOPMENT-HANDOFF.md`: sehr kompakte Momentaufnahme (aktueller Release, aktueller Branch, aktuell offener Arbeitsschritt) für den Wechsel in einen neuen Chat, ohne die volle Historie zu wiederholen. Wird am Ende größerer Arbeitseinheiten zusammen mit diesem Dokument aktualisiert.
+
+---
+
+# 19. Kurzfazit
 
 Der Coloring Region Extractor hat sich von einem einfachen Connected-Components-Prototypen zu einem spezialisierten Produktionswerkzeug entwickelt.
 

@@ -14,6 +14,22 @@ Die aktuelle Version steht zusätzlich in `VERSION`.
 
 `PROJECT-STATUS.md` enthält den laufenden Arbeitsstand und darf zwischen Releases aktualisiert werden.
 
+## Handoff-Pflicht
+
+Nach jeder größeren Arbeitseinheit (Feature abgeschlossen, wichtige Entscheidung getroffen, vor einem Chat-/Sitzungswechsel):
+
+1. `PROJECT-STATUS.md` auf den aktuellen Stand bringen.
+2. `DEVELOPMENT-HANDOFF.md` auf den unmittelbar nächsten Arbeitsschritt setzen (aktueller Branch, aktuell offene Aufgabe, nächster Branch).
+3. Beides zusammen committen:
+
+```bash
+git add PROJECT-STATUS.md DEVELOPMENT-HANDOFF.md
+git commit -m "Projektstand und nächsten Entwicklungsschritt dokumentieren"
+git push
+```
+
+Ziel: Ein neuer Chat/Agent kann allein anhand von `PROJECT-STATUS.md` und `DEVELOPMENT-HANDOFF.md` weiterarbeiten, ohne die bisherige Konversation zu kennen.
+
 ## Branches
 
 - `main`: immer lauffähiger aktueller Stand
