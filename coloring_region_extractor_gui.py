@@ -3388,51 +3388,139 @@ class ColoringRegionExtractor(tk.Tk):
     # SVG outline vectorization
     # ------------------------------------------------------------------
 
+    def _closed_catmull_rom_svg_path(self, points, tension=0.92):
+        """
+        Convert a closed polygon into a smooth cubic Bezier SVG subpath.
+
+        Catmull-Rom style control points preserve the overall contour while
+        replacing the many short raster-derived line segments with continuous
+        curves. `tension` below 1.0 slightly reduces overshoot on tight details.
+        """
+        pts = np.asarray(points, dtype=np.float64)
+
+        if len(pts) < 3:
+            return ""
+
+        cleaned = [pts[0]]
+        for point in pts[1:]:
+            if np.linalg.norm(point - cleaned[-1]) > 1e-6:
+                cleaned.append(point)
+
+        pts = np.asarray(cleaned, dtype=np.float64)
+        n = len(pts)
+
+        if n < 3:
+            return ""
+
+        parts = [f"M {pts[0][0]:.2f},{pts[0][1]:.2f}"]
+        factor = float(tension) / 6.0
+
+        for i in range(n):
+            p0 = pts[(i - 1) % n]
+            p1 = pts[i]
+            p2 = pts[(i + 1) % n]
+            p3 = pts[(i + 2) % n]
+
+            c1 = p1 + (p2 - p0) * factor
+            c2 = p2 - (p3 - p1) * factor
+
+            parts.append(
+                "C "
+                f"{c1[0]:.2f},{c1[1]:.2f} "
+                f"{c2[0]:.2f},{c2[1]:.2f} "
+                f"{p2[0]:.2f},{p2[1]:.2f}"
+            )
+
+        parts.append("Z")
+        return " ".join(parts)
+
     def _outline_svg_path_data(self):
         """
-        Convert the current binary line mask into one compound SVG path.
+        Convert the binary outline mask into smooth compound SVG Bezier paths.
 
-        The black line artwork is already available as a binary mask. We trace
-        all contour boundaries and emit them into a single compound path using
-        fill-rule="evenodd". This preserves holes inside thick strokes and
-        keeps the outline as a true vector layer in the exported SVG.
+        The visual outline is processed only for SVG export:
+        1. Smooth the raster boundary with a light Gaussian blur.
+        2. Remove staircase noise with adaptive contour simplification.
+        3. Convert closed contours into cubic Bezier curves.
+
+        Region detection, game-area masks and JSON geometry stay unchanged.
+        RETR_TREE plus fill-rule="evenodd" continues to preserve holes.
         """
         if self.line_mask is None:
             return ""
 
         mask = (self.line_mask > 0).astype(np.uint8) * 255
 
-        contours, _hierarchy = cv2.findContours(
+        padded = cv2.copyMakeBorder(
             mask,
+            3, 3, 3, 3,
+            cv2.BORDER_CONSTANT,
+            value=0,
+        )
+
+        blurred = cv2.GaussianBlur(
+            padded,
+            (0, 0),
+            sigmaX=1.15,
+            sigmaY=1.15,
+        )
+
+        _, smooth_mask = cv2.threshold(
+            blurred,
+            112,
+            255,
+            cv2.THRESH_BINARY,
+        )
+
+        smooth_mask = smooth_mask[3:-3, 3:-3]
+
+        contours, _hierarchy = cv2.findContours(
+            smooth_mask,
             cv2.RETR_TREE,
-            cv2.CHAIN_APPROX_SIMPLE,
+            cv2.CHAIN_APPROX_NONE,
         )
 
         if not contours:
             return ""
 
-        epsilon = max(0.35, float(self.simplify_var.get()) * 0.45)
         subpaths = []
 
         for contour in contours:
-            if len(contour) < 3:
+            if len(contour) < 6:
                 continue
 
-            approx = cv2.approxPolyDP(contour, epsilon, True)
-            points = approx.reshape(-1, 2)
+            perimeter = cv2.arcLength(contour, True)
+
+            epsilon = max(
+                0.55,
+                min(
+                    2.4,
+                    perimeter * 0.00135,
+                ),
+            )
+
+            approx = cv2.approxPolyDP(
+                contour,
+                epsilon,
+                True,
+            )
+
+            points = approx.reshape(-1, 2).astype(np.float64)
 
             if len(points) < 3:
                 continue
 
-            subpath = (
-                "M "
-                + " ".join(
-                    f"{float(x):.2f},{float(y):.2f}"
-                    for x, y in points
-                )
-                + " Z"
+            area = abs(cv2.contourArea(approx))
+            if area < 1.5:
+                continue
+
+            subpath = self._closed_catmull_rom_svg_path(
+                points,
+                tension=0.92,
             )
-            subpaths.append(subpath)
+
+            if subpath:
+                subpaths.append(subpath)
 
         return " ".join(subpaths)
 
