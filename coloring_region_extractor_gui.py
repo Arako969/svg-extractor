@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Coloring Region Extractor v7
+Coloring Region Extractor v8
 
 Features:
 - Automatic closed-region detection
@@ -21,7 +21,7 @@ Requirements:
     pip install opencv-python pillow numpy
 
 Run:
-    python3 coloring_region_extractor_gui_v7.py
+    python3 coloring_region_extractor_gui_v8.py
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ class ColoringRegionExtractor(tk.Tk):
     def __init__(self):
         super().__init__()
 
-        self.title("Coloring Region Extractor v7")
+        self.title("Coloring Region Extractor v8")
         self.geometry("1720x980")
         self.minsize(1050, 700)
         self.resizable(True, True)
@@ -76,6 +76,9 @@ class ColoringRegionExtractor(tk.Tk):
         self.micro_min_area_var = tk.IntVar(value=8)
         self.relative_split_var = tk.BooleanVar(value=False)
         self.split_min_percent_var = tk.DoubleVar(value=0.08)
+        self.recovery_min_area_var = tk.IntVar(value=20)
+        self.recovery_erode_var = tk.IntVar(value=1)
+        self.recovery_enabled_var = tk.BooleanVar(value=True)
 
         # Preview
         self.preview_photo: ImageTk.PhotoImage | None = None
@@ -429,6 +432,58 @@ class ColoringRegionExtractor(tk.Tk):
             highlightbackground="#888888",
         )
         self.palette_canvas.pack(fill="x", pady=(0, 4))
+
+        ttk.Separator(left).pack(fill="x", pady=8)
+
+        ttk.Label(
+            left,
+            text="Farbbasierte Wiederherstellung",
+            font=("Helvetica", 12, "bold"),
+        ).pack(anchor="w")
+
+        ttk.Label(
+            left,
+            text=(
+                "Ergänzt Farbflächen aus der kolorierten Vorlage, wenn "
+                "die Outline dort offen oder unvollständig ist."
+            ),
+            wraplength=390,
+            justify="left",
+        ).pack(anchor="w", pady=(3, 5))
+
+        ttk.Checkbutton(
+            left,
+            text="Wiederherstellung aktiv",
+            variable=self.recovery_enabled_var,
+        ).pack(anchor="w", pady=2)
+
+        self._add_slider(
+            left,
+            "Min. Recovery-Fläche",
+            self.recovery_min_area_var,
+            2,
+            1000,
+        )
+
+        self._add_slider(
+            left,
+            "Randabstand",
+            self.recovery_erode_var,
+            0,
+            6,
+        )
+
+        ttk.Button(
+            left,
+            text="Fehlende Regionen aus Farbvorlage suchen",
+            command=self.recover_missing_regions_from_color,
+        ).pack(fill="x", pady=(5, 2))
+
+        ttk.Button(
+            left,
+            text="Recovery-Regionen löschen",
+            command=self.remove_recovered_regions,
+        ).pack(fill="x", pady=2)
 
         ttk.Separator(left).pack(fill="x", pady=10)
 
@@ -865,6 +920,7 @@ class ColoringRegionExtractor(tk.Tk):
                     "parent_id": None,
                     "is_overlay": False,
                     "is_micro": False,
+                    "is_recovered": False,
                     "priority": 0,
                     "mask": None,
                 }
@@ -944,6 +1000,7 @@ class ColoringRegionExtractor(tk.Tk):
                         "parent_id": None,
                         "is_overlay": False,
                         "is_micro": True,
+                        "is_recovered": False,
                         "priority": 0,
                         "mask": raw_mask.copy(),
                     }
@@ -1481,6 +1538,7 @@ class ColoringRegionExtractor(tk.Tk):
                             "parent_id": parent_id,
                             "is_overlay": True,
                             "is_micro": False,
+                            "is_recovered": False,
                             "priority": 1,
                             "mask": comp_mask.copy(),
                         }
@@ -1550,6 +1608,280 @@ class ColoringRegionExtractor(tk.Tk):
         self.status_var.set(
             "Farbbasierte Unterregionen der Auswahl wurden entfernt."
         )
+
+
+    # ------------------------------------------------------------------
+    # Color recovery for incomplete/open outline regions
+    # ------------------------------------------------------------------
+
+    def _palette_label_map_full_image(self):
+        """
+        Convert the complete colored reference into palette IDs using Lab
+        distance. This lets us recover color islands even when the outline
+        is not closed.
+        """
+        if self.color_bgr is None or not self.palette:
+            return None
+
+        h, w = self.color_bgr.shape[:2]
+
+        color_img = self.color_bgr.copy()
+
+        # A light median blur removes antialias speckles without changing
+        # larger colored cells much.
+        smooth_size = max(1, int(self.split_smooth_var.get()))
+        if smooth_size % 2 == 0:
+            smooth_size += 1
+        if smooth_size > 1:
+            color_img = cv2.medianBlur(color_img, smooth_size)
+
+        flat_bgr = color_img.reshape(-1, 1, 3)
+        flat_lab = cv2.cvtColor(flat_bgr, cv2.COLOR_BGR2LAB).reshape(-1, 3).astype(np.float32)
+
+        centers = []
+        ids = []
+
+        for entry in self.palette:
+            rgb = np.array(entry["rgb"], dtype=np.uint8).reshape(1, 1, 3)
+            bgr = rgb[:, :, ::-1]
+            lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).reshape(3).astype(np.float32)
+            centers.append(lab)
+            ids.append(int(entry["id"]))
+
+        centers = np.array(centers, dtype=np.float32)
+        dists = ((flat_lab[:, None, :] - centers[None, :, :]) ** 2).sum(axis=2)
+        nearest = np.argmin(dists, axis=1)
+
+        mapped = np.array([ids[i] for i in nearest], dtype=np.int16)
+        return mapped.reshape(h, w)
+
+    def _existing_region_same_color_overlap(self, candidate_mask, color_id):
+        """
+        Return the best overlap ratio with an already existing region that
+        is assigned to the same palette color. If overlap is high, the
+        candidate is already represented and does not need recovery.
+        """
+        area = int(candidate_mask.sum())
+        if area <= 0:
+            return 0.0
+
+        best = 0.0
+
+        for region in self.regions:
+            if region.get("is_recovered", False):
+                continue
+
+            rid = region.get("suggested_color_id")
+            group = self._group_for_region(region["id"])
+            if group is not None:
+                rid = group.get("color_id")
+
+            if rid != color_id:
+                continue
+
+            rmask = self._region_mask(region)
+            if rmask is None:
+                continue
+
+            overlap = int(np.logical_and(candidate_mask, rmask).sum())
+            ratio = overlap / max(1, area)
+            best = max(best, ratio)
+
+            if best >= 0.82:
+                break
+
+        return best
+
+    def recover_missing_regions_from_color(self):
+        """
+        Detect connected palette-color islands in the colored reference.
+        If an island is not already represented by a region of the same
+        target color, create a high-priority recovered overlay region.
+        """
+        if not self.recovery_enabled_var.get():
+            messagebox.showinfo(
+                "Hinweis",
+                "Die farbbasierte Wiederherstellung ist deaktiviert.",
+            )
+            return
+
+        if self.color_bgr is None:
+            messagebox.showinfo(
+                "Hinweis",
+                "Bitte zuerst eine kolorierte Farbvorlage laden.",
+            )
+            return
+
+        if not self.palette:
+            self.analyze_colors()
+            if not self.palette:
+                return
+
+        if self.labels is None:
+            return
+
+        # Recalculate from scratch to avoid duplicates.
+        self.remove_recovered_regions(refresh=False)
+
+        color_map = self._palette_label_map_full_image()
+        if color_map is None:
+            return
+
+        min_area = max(1, int(self.recovery_min_area_var.get()))
+        erode_px = max(0, int(self.recovery_erode_var.get()))
+
+        next_id = max([r["id"] for r in self.regions], default=0) + 1
+        created = 0
+        skipped_existing = 0
+        skipped_small = 0
+
+        h, w = color_map.shape
+
+        for entry in self.palette:
+            color_id = int(entry["id"])
+
+            mask = (color_map == color_id).astype(np.uint8) * 255
+
+            # Ignore very dark outline-like source pixels even if palette
+            # clustering assigned them to a nearby color.
+            hsv = cv2.cvtColor(self.color_bgr, cv2.COLOR_BGR2HSV)
+            if self.ignore_dark_var.get():
+                mask[hsv[:, :, 2] <= int(self.dark_threshold_var.get())] = 0
+
+            if erode_px > 0:
+                kernel_size = erode_px * 2 + 1
+                kernel = cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE,
+                    (kernel_size, kernel_size),
+                )
+                mask = cv2.erode(mask, kernel, iterations=1)
+
+            # Remove one-pixel islands while preserving real small cells.
+            tiny_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, tiny_kernel)
+
+            n, comps, stats, cents = cv2.connectedComponentsWithStats(
+                (mask > 0).astype(np.uint8),
+                connectivity=8,
+            )
+
+            for comp_id in range(1, n):
+                area = int(stats[comp_id, cv2.CC_STAT_AREA])
+
+                if area < min_area:
+                    skipped_small += 1
+                    continue
+
+                comp_mask = comps == comp_id
+
+                # Skip a color island if it is already substantially covered
+                # by an existing region with the same color assignment.
+                overlap = self._existing_region_same_color_overlap(
+                    comp_mask,
+                    color_id,
+                )
+                if overlap >= 0.72:
+                    skipped_existing += 1
+                    continue
+
+                contour_img = comp_mask.astype(np.uint8) * 255
+                contours, _ = cv2.findContours(
+                    contour_img,
+                    cv2.RETR_EXTERNAL,
+                    cv2.CHAIN_APPROX_SIMPLE,
+                )
+                if not contours:
+                    continue
+
+                contour = max(contours, key=cv2.contourArea)
+                approx = cv2.approxPolyDP(
+                    contour,
+                    float(self.simplify_var.get()),
+                    True,
+                )
+                points = approx.reshape(-1, 2)
+
+                if len(points) < 3:
+                    continue
+
+                x = int(stats[comp_id, cv2.CC_STAT_LEFT])
+                y = int(stats[comp_id, cv2.CC_STAT_TOP])
+                ww = int(stats[comp_id, cv2.CC_STAT_WIDTH])
+                hh = int(stats[comp_id, cv2.CC_STAT_HEIGHT])
+                cx, cy = cents[comp_id]
+
+                rgb = self._palette_rgb(color_id)
+
+                self.regions.append(
+                    {
+                        "id": next_id,
+                        "source_label": None,
+                        "area": area,
+                        "bbox": [x, y, ww, hh],
+                        "centroid": [float(cx), float(cy)],
+                        "points": points.tolist(),
+                        "active": True,
+                        "target_color": list(rgb) if rgb is not None else None,
+                        "suggested_color_id": color_id,
+                        "parent_id": None,
+                        "is_overlay": True,
+                        "is_micro": False,
+                        "is_recovered": True,
+                        "priority": 2,
+                        "mask": comp_mask.copy(),
+                    }
+                )
+
+                next_id += 1
+                created += 1
+
+        self.regions.sort(
+            key=lambda r: (
+                int(r.get("priority", 0)),
+                int(r["id"]),
+            )
+        )
+
+        self.selected_region_ids.clear()
+        self._update_counts()
+        self.refresh_preview()
+
+        self.status_var.set(
+            f"Recovery abgeschlossen: {created} Regionen ergänzt, "
+            f"{skipped_existing} bereits vorhanden, "
+            f"{skipped_small} zu klein."
+        )
+
+    def remove_recovered_regions(self, refresh=True):
+        remove_ids = {
+            region["id"]
+            for region in self.regions
+            if region.get("is_recovered", False)
+        }
+
+        if not remove_ids:
+            return
+
+        self.regions = [
+            region
+            for region in self.regions
+            if region["id"] not in remove_ids
+        ]
+
+        self.selected_region_ids -= remove_ids
+
+        for group in self.groups.values():
+            group["region_ids"] -= remove_ids
+
+        self._remove_empty_groups()
+
+        if refresh:
+            self._refresh_group_list()
+            self._update_counts()
+            self.refresh_preview()
+            self.status_var.set(
+                "Recovery-Regionen wurden entfernt."
+            )
 
     # ------------------------------------------------------------------
     # Helpers / groups
@@ -1702,6 +2034,26 @@ class ColoringRegionExtractor(tk.Tk):
                 )
 
         preview[self.line_mask > 0] = (25, 25, 25)
+
+        # Mark automatically recovered regions so they are easy to review.
+        for region in self.regions:
+            if not region.get("is_recovered", False) or not region.get("active", True):
+                continue
+            rmask = self._region_mask(region)
+            if rmask is None:
+                continue
+            contours, _ = cv2.findContours(
+                rmask.astype(np.uint8) * 255,
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
+            cv2.drawContours(
+                preview,
+                contours,
+                -1,
+                (0, 220, 255),
+                2,
+            )
 
         # Selected regions
         for rid in self.selected_region_ids:
@@ -2454,6 +2806,15 @@ class ColoringRegionExtractor(tk.Tk):
         self.split_min_percent_var.set(
             color_params.get("split_min_percent", 0.08)
         )
+        self.recovery_enabled_var.set(
+            color_params.get("recovery_enabled", True)
+        )
+        self.recovery_min_area_var.set(
+            color_params.get("recovery_min_area", 20)
+        )
+        self.recovery_erode_var.set(
+            color_params.get("recovery_erode", 1)
+        )
 
         # Build current region geometry.
         self.analyze()
@@ -2508,10 +2869,13 @@ class ColoringRegionExtractor(tk.Tk):
             [],
         )
 
-        # Restore generated color subregions saved in the project.
+        # Restore generated color subregions and recovered regions.
         current_ids = {r["id"] for r in self.regions}
         for saved in data.get("regions", []):
-            if not saved.get("is_overlay", False):
+            if not (
+                saved.get("is_overlay", False)
+                or saved.get("is_recovered", False)
+            ):
                 continue
 
             rid = int(saved["id"])
@@ -2537,8 +2901,9 @@ class ColoringRegionExtractor(tk.Tk):
                 "target_color": saved.get("target_color"),
                 "suggested_color_id": saved.get("suggested_color_id"),
                 "parent_id": saved.get("parent_id"),
-                "is_overlay": True,
-                "is_micro": False,
+                "is_overlay": bool(saved.get("is_overlay", True)),
+                "is_micro": bool(saved.get("is_micro", False)),
+                "is_recovered": bool(saved.get("is_recovered", False)),
                 "priority": int(saved.get("priority", 1)),
                 "mask": mask.astype(bool),
             })
@@ -2621,6 +2986,9 @@ class ColoringRegionExtractor(tk.Tk):
                 "split_smooth": int(self.split_smooth_var.get()),
                 "relative_split": bool(self.relative_split_var.get()),
                 "split_min_percent": float(self.split_min_percent_var.get()),
+                "recovery_enabled": bool(self.recovery_enabled_var.get()),
+                "recovery_min_area": int(self.recovery_min_area_var.get()),
+                "recovery_erode": int(self.recovery_erode_var.get()),
             },
             "palette": self.palette,
             "regions": [
@@ -2636,6 +3004,7 @@ class ColoringRegionExtractor(tk.Tk):
                     "parent_id": region.get("parent_id"),
                     "is_overlay": bool(region.get("is_overlay", False)),
                     "is_micro": bool(region.get("is_micro", False)),
+                    "is_recovered": bool(region.get("is_recovered", False)),
                     "priority": int(region.get("priority", 0)),
                 }
                 for region in self.regions
@@ -2756,6 +3125,7 @@ class ColoringRegionExtractor(tk.Tk):
                         f'<path id="group_{gid:03d}_region_{region["id"]:03d}" '
                         f'data-region-id="{region["id"]}" '
                         f'data-priority="{int(region.get("priority", 0))}" '
+                        f'data-recovered="{1 if region.get("is_recovered", False) else 0}" '
                         f'data-parent-id="{region.get("parent_id") if region.get("parent_id") is not None else ""}" '
                         f'd="{d}" fill="{color_hex}" stroke="none"/>'
                     )
@@ -2804,6 +3174,7 @@ class ColoringRegionExtractor(tk.Tk):
                     f'<path id="region_{region["id"]:03d}" '
                     f'data-region-id="{region["id"]}" '
                     f'data-priority="{int(region.get("priority", 0))}" '
+                    f'data-recovered="{1 if region.get("is_recovered", False) else 0}" '
                     f'data-parent-id="{region.get("parent_id") if region.get("parent_id") is not None else ""}" '
                     f'd="{d}" fill="{color_hex}" stroke="none"/>'
                 )
@@ -2913,6 +3284,7 @@ class ColoringRegionExtractor(tk.Tk):
                     "parent_id": region.get("parent_id"),
                     "is_overlay": bool(region.get("is_overlay", False)),
                     "is_micro": bool(region.get("is_micro", False)),
+                    "is_recovered": bool(region.get("is_recovered", False)),
                     "priority": int(region.get("priority", 0)),
                 }
                 for region in self.regions
