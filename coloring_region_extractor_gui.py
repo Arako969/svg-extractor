@@ -4293,6 +4293,19 @@ class ColoringRegionExtractor(tk.Tk):
         )
 
     def export_game_json(self):
+        """
+        Export gameplay data for Godot.
+
+        v3 separates responsibilities clearly:
+        - `regions` contains the actual gameplay geometry and region metadata.
+        - `game_areas` contains logical gameplay units that reference one or
+          more regions.
+        - every active ungrouped region is exported as an implicit one-region
+          game area, so Godot never needs a special "ungrouped" code path.
+
+        The extractor UI/behavior is unchanged. This only serializes data that
+        already exists in memory.
+        """
         if self.labels is None:
             return
 
@@ -4311,6 +4324,58 @@ class ColoringRegionExtractor(tk.Tk):
 
         h, w = self.labels.shape
 
+        # --------------------------------------------------------------
+        # Regions: pure geometry + per-region metadata
+        # --------------------------------------------------------------
+        regions_export = []
+
+        for region in self.regions:
+            if not region.get("active", True):
+                continue
+
+            target_color = region.get("target_color")
+            color_id = region.get("suggested_color_id")
+
+            regions_export.append(
+                {
+                    "id": int(region["id"]),
+                    "points": [
+                        [float(x), float(y)]
+                        for x, y in region.get("points", [])
+                    ],
+                    "centroid": [
+                        float(region["centroid"][0]),
+                        float(region["centroid"][1]),
+                    ],
+                    "area": int(region.get("area", 0)),
+                    "bbox": [
+                        int(v)
+                        for v in region.get("bbox", [0, 0, 0, 0])
+                    ],
+                    "color_id": (
+                        int(color_id)
+                        if color_id is not None
+                        else None
+                    ),
+                    "target_color": target_color,
+                    "target_color_hex": (
+                        self._rgb_to_hex(target_color)
+                        if target_color is not None
+                        else None
+                    ),
+                    "parent_id": region.get("parent_id"),
+                    "is_overlay": bool(region.get("is_overlay", False)),
+                    "is_micro": bool(region.get("is_micro", False)),
+                    "is_recovered": bool(region.get("is_recovered", False)),
+                    "is_manual": bool(region.get("is_manual", False)),
+                    "force_label": bool(region.get("force_label", False)),
+                    "priority": int(region.get("priority", 0)),
+                }
+            )
+
+        # --------------------------------------------------------------
+        # Game Areas: logical gameplay units
+        # --------------------------------------------------------------
         game_areas = []
         grouped_ids = set()
 
@@ -4322,7 +4387,7 @@ class ColoringRegionExtractor(tk.Tk):
                 for rid in sorted(group["region_ids"])
                 if (
                     self._region_by_id(rid)
-                    and self._region_by_id(rid)["active"]
+                    and self._region_by_id(rid).get("active", True)
                 )
             ]
 
@@ -4343,21 +4408,81 @@ class ColoringRegionExtractor(tk.Tk):
 
             game_areas.append(
                 {
-                    "id": gid,
-                    "name": group["name"],
-                    "color_id": group["color_id"],
+                    "id": f"group_{int(gid):03d}",
+                    "source_group_id": int(gid),
+                    "name": group.get("name", f"Gruppe {gid}"),
+                    "color_id": int(group["color_id"]),
                     "target_color": rgb,
                     "target_color_hex": (
                         self._rgb_to_hex(rgb)
-                        if rgb is not None else None
+                        if rgb is not None
+                        else None
                     ),
                     "region_ids": active_ids,
-                    "label_position": label_pos,
+                    "label_position": (
+                        [
+                            float(label_pos[0]),
+                            float(label_pos[1]),
+                        ]
+                        if label_pos is not None
+                        else None
+                    ),
+                    "is_implicit": False,
+                }
+            )
+
+        # Every active region not already contained in a manual group becomes
+        # an implicit one-region game area.
+        for region in self.regions:
+            if (
+                not region.get("active", True)
+                or region["id"] in grouped_ids
+            ):
+                continue
+
+            color_id = region.get("suggested_color_id")
+            rgb = (
+                self._palette_rgb(color_id)
+                if color_id is not None
+                else None
+            )
+
+            if rgb is None:
+                rgb = region.get("target_color")
+
+            centroid = region.get("centroid")
+
+            game_areas.append(
+                {
+                    "id": f"region_{int(region['id']):03d}",
+                    "source_group_id": None,
+                    "name": f"Region {int(region['id'])}",
+                    "color_id": (
+                        int(color_id)
+                        if color_id is not None
+                        else 0
+                    ),
+                    "target_color": rgb,
+                    "target_color_hex": (
+                        self._rgb_to_hex(rgb)
+                        if rgb is not None
+                        else None
+                    ),
+                    "region_ids": [int(region["id"])],
+                    "label_position": (
+                        [
+                            float(centroid[0]),
+                            float(centroid[1]),
+                        ]
+                        if centroid is not None
+                        else None
+                    ),
+                    "is_implicit": True,
                 }
             )
 
         data = {
-            "format": "coloring_game_export_v2",
+            "format": "coloring_game_export_v3",
             "source": (
                 self.image_path.name
                 if self.image_path else None
@@ -4366,29 +4491,11 @@ class ColoringRegionExtractor(tk.Tk):
                 self.color_image_path.name
                 if self.color_image_path else None
             ),
-            "width": w,
-            "height": h,
+            "width": int(w),
+            "height": int(h),
             "palette": self.palette,
+            "regions": regions_export,
             "game_areas": game_areas,
-            "ungrouped_active_regions": [
-                {
-                    "region_id": region["id"],
-                    "color_id": region.get("suggested_color_id"),
-                    "target_color": region.get("target_color"),
-                    "parent_id": region.get("parent_id"),
-                    "is_overlay": bool(region.get("is_overlay", False)),
-                    "is_micro": bool(region.get("is_micro", False)),
-                    "is_recovered": bool(region.get("is_recovered", False)),
-                    "is_manual": bool(region.get("is_manual", False)),
-                    "force_label": bool(region.get("force_label", False)),
-                    "priority": int(region.get("priority", 0)),
-                }
-                for region in self.regions
-                if (
-                    region["active"]
-                    and region["id"] not in grouped_ids
-                )
-            ],
         }
 
         Path(path).write_text(
@@ -4401,7 +4508,9 @@ class ColoringRegionExtractor(tk.Tk):
         )
 
         self.status_var.set(
-            f"Game JSON gespeichert: {Path(path).name}"
+            f"Game JSON v3 gespeichert: {Path(path).name} | "
+            f"{len(regions_export)} Regionen, "
+            f"{len(game_areas)} Game Areas"
         )
 
     def export_outline_png(self):
