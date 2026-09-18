@@ -50,8 +50,8 @@ Dreigeteiltes `ttk.Panedwindow`, aufgebaut in `_build_ui()`: scrollbare linke Si
 
 ### Exportformate (siehe PROJECT-STATUS.md §8–9 für das Ziel-Schema)
 
-- `export_svg()` — Game SVG mit Metadaten pro Region (`group-id`, `region-id`, `color-id`, Zielfarbe, Label-Position, `priority`, Recovered-/Manual-Flags). Eine geplante, aber noch nicht umgesetzte Änderung ist, die Outline selbst als eigene `<g id="outlines">`-Ebene über `<g id="game_areas">` zu legen.
-- `export_game_json()` — vollständige Projektdaten: Quellbildpfade, Abmessungen, Palette, Game Areas, Farb-IDs/Zielfarben, Label-Positionen, ungruppierte aktive Regionen.
+- `export_svg()` — Game SVG mit zwei Ebenen: `<g id="game_areas">` (Farbflächen, mit kontrollierter Überdeckung unter die Outline) und `<g id="outlines">` (separate, distanzfeld-geglättete Vektor-Outline). Metadaten pro Region: `group-id`, `region-id`, `color-id`, Zielfarbe, Label-Position, `priority`, Recovered-/Manual-Flags.
+- `export_game_json()` — aktuell in Migration von v2 auf v3 (Branch `feature/game-export-v3`, siehe PROJECT-STATUS.md §8): `regions` enthält pro aktiver technischer Region die reine Gameplay-Geometrie (`points`, `centroid`, `area`, `bbox`, Farbe, Priorität, Overlay-Flags); `game_areas` enthält die spielerischen Einheiten — manuelle Gruppen (`is_implicit = false`, mehrere `region_ids`) und automatisch erzeugte Ein-Region-Game-Areas für nicht gruppierte aktive Regionen (`is_implicit = true`). Ziel: Godot parst für Gameplay-Geometrie kein SVG mehr, nur noch das JSON.
 - `export_outline_png()` — transparentes PNG nur mit der schwarzen Outline.
 - `export_preview()` — gerenderte Vorschau als PNG.
 - `save_project()` / `load_project()` — vollständiges Roundtrip des Editor-Zustands (`_project_data()`), unabhängig von den obigen Exportformaten.
