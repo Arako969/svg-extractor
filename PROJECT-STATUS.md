@@ -706,19 +706,28 @@ Metadaten:
 - priority
 - recovered/manual flags
 
-## Game JSON
+## Game JSON (v3, Branch `feature/game-export-v3`, getestet, noch nicht gemerged/released)
+
+`format: "coloring_game_export_v3"`. Ziel: Godot muss für Gameplay-Geometrie keine SVG-Pfade mehr parsen — alles Spielrelevante steht explizit im JSON, das SVG bleibt rein visuell (Fills + geglättete Outline). Die Funktionalität des Extractors selbst ändert sich nicht, es werden nur bereits vorhandene Daten sauber strukturiert exportiert.
 
 Enthält:
 
-- Quellbild
-- Farbvorlage
-- Breite / Höhe
-- Palette
-- Game Areas
-- Farb-IDs
-- Zielfarben
-- Label-Positionen
-- ungegruppierte aktive Regionen
+- Quellbild, Farbvorlage, Breite/Höhe, Palette
+- **`regions`** — pro aktiver technischer Region: `id`, `points` (ursprüngliche Gameplay-Geometrie, nicht die visuell erweiterte SVG-Fill-Geometrie), `centroid`, `area`, `bbox`, `color_id`, `target_color`, `target_color_hex`, `parent_id`, `is_overlay`, `is_micro`, `is_recovered`, `is_manual`, `force_label`, `priority`
+- **`game_areas`** — die spielerischen Einheiten:
+  - manuell gruppierte Game Areas referenzieren mehrere `region_ids`, behalten Gruppenname, Farb-ID, Zielfarbe und Label-Position, `is_implicit = false`
+  - nicht gruppierte aktive Regionen werden automatisch als Game Area mit genau einer Region exportiert (`id = region_XXX`, `region_ids = [XXX]`, Label-Position = Region-Centroid, `is_implicit = true`) — dadurch braucht Godot keinen Sonderfall für ungegruppierte Regionen
+
+Die frühere separate Liste `ungrouped_active_regions` (v2) entfällt dadurch; diese Regionen sind jetzt reguläre (implizite) `game_areas`-Einträge.
+
+### Verantwortlichkeiten
+
+- **JSON:** Spielgeometrie, Game-Area-Struktur, Farben, Label-Positionen, Prioritäten/Overlay-Metadaten
+- **SVG:** visuelle Fills, geglättete Outline
+
+### Test
+
+Verifiziert am Hundemotiv: `regions` enthält alle aktiven Regionen mit `points`/`centroid`, `game_areas` enthält auch ungegruppierte Regionen, manuelle Gruppen referenzieren mehrere `region_ids` korrekt, SVG-Export optisch unverändert.
 
 ## Outline PNG
 
@@ -1137,12 +1146,16 @@ Dadurch können:
 
 **Release-Stand:** `v0.11.0`
 
+**Abgeschlossen und vom Nutzer getestet, aber noch nicht gemerged/released:**
+
+- Game-Export v3 (Branch `feature/game-export-v3`, siehe §8) — JSON enthält jetzt explizite Regionsgeometrie und behandelt ungruppierte Regionen als implizite Game Areas. Wartet auf Merge nach `main` und Entscheidung über die nächste Release-Version.
+
 **Noch nicht released:**
 
 - endgültiger Godot-Importer
 - finales Austauschformat
 
-Empfohlener nächster Branch:
+Empfohlener nächster Branch nach Merge von `feature/game-export-v3`:
 
 ```bash
 feature/godot-importer
