@@ -18,7 +18,7 @@ Features:
 - Preview with detected target colors
 
 Requirements:
-    pip install opencv-python pillow numpy
+    pip install opencv-python pillow numpy shapely
 
 Run:
     python3 coloring_region_extractor_gui_v10.py
@@ -27,6 +27,7 @@ Run:
 from __future__ import annotations
 
 import json
+import struct
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from pathlib import Path
@@ -34,6 +35,16 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
+
+try:
+    from shapely import constrained_delaunay_triangles, make_valid
+    from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
+    SHAPELY_AVAILABLE = True
+except ImportError:
+    constrained_delaunay_triangles = None
+    make_valid = None
+    GeometryCollection = MultiPolygon = Polygon = None
+    SHAPELY_AVAILABLE = False
 
 
 class ColoringRegionExtractor(tk.Tk):
@@ -4292,12 +4303,350 @@ class ColoringRegionExtractor(tk.Tk):
             f"Game SVG mit Vektor-Outline gespeichert: {Path(path).name}"
         )
 
+    def _sample_closed_catmull_rom(self, points, tension=0.44):
+        """
+        Sample the same cubic curve used by the SVG outline export.
+
+        The result is a dense polygonal approximation used only for the
+        pre-triangulated Godot outline mesh. The SVG itself remains unchanged.
+        """
+        pts = np.asarray(points, dtype=np.float64)
+
+        if len(pts) < 3:
+            return pts
+
+        cleaned = [pts[0]]
+        for point in pts[1:]:
+            if np.linalg.norm(point - cleaned[-1]) > 1e-6:
+                cleaned.append(point)
+
+        pts = np.asarray(cleaned, dtype=np.float64)
+        n = len(pts)
+
+        if n < 3:
+            return pts
+
+        factor = float(tension) / 6.0
+        sampled = []
+
+        for i in range(n):
+            p0 = pts[(i - 1) % n]
+            p1 = pts[i]
+            p2 = pts[(i + 1) % n]
+            p3 = pts[(i + 2) % n]
+
+            c1 = p1 + (p2 - p0) * factor
+            c2 = p2 - (p3 - p1) * factor
+
+            chord = float(np.linalg.norm(p2 - p1))
+            steps = max(3, min(14, int(np.ceil(chord / 1.25))))
+
+            for step in range(steps):
+                t = step / float(steps)
+                u = 1.0 - t
+
+                point = (
+                    (u ** 3) * p1
+                    + 3.0 * (u ** 2) * t * c1
+                    + 3.0 * u * (t ** 2) * c2
+                    + (t ** 3) * p2
+                )
+                sampled.append(point)
+
+        return np.asarray(sampled, dtype=np.float64)
+
+    def _outline_mesh_rings(self):
+        """
+        Build smooth sampled rings from the same outline source used by SVG.
+
+        Returns:
+            rings_by_index: dict[contour_index] -> Nx2 float array
+            hierarchy: OpenCV contour hierarchy array
+        """
+        if self.line_mask is None:
+            return {}, None
+
+        scale = 8
+        mask = (self.line_mask > 0).astype(np.uint8)
+
+        hi = cv2.resize(
+            mask,
+            None,
+            fx=scale,
+            fy=scale,
+            interpolation=cv2.INTER_NEAREST,
+        )
+
+        inside = cv2.distanceTransform(hi, cv2.DIST_L2, 5)
+        outside = cv2.distanceTransform(1 - hi, cv2.DIST_L2, 5)
+
+        signed = inside - outside
+        signed = cv2.GaussianBlur(
+            signed,
+            (0, 0),
+            sigmaX=4.0,
+            sigmaY=4.0,
+        )
+
+        smooth_mask = (signed >= 0.0).astype(np.uint8) * 255
+
+        contours, hierarchy = cv2.findContours(
+            smooth_mask,
+            cv2.RETR_TREE,
+            cv2.CHAIN_APPROX_NONE,
+        )
+
+        if not contours or hierarchy is None:
+            return {}, None
+
+        rings = {}
+        tolerance = max(
+            0.05,
+            float(self.svg_outline_tolerance_var.get()),
+        )
+
+        for contour_index, contour in enumerate(contours):
+            if len(contour) < 12:
+                continue
+
+            area = (
+                abs(cv2.contourArea(contour))
+                / float(scale * scale)
+            )
+            if area < 1.0:
+                continue
+
+            points = (
+                contour.reshape(-1, 2).astype(np.float64)
+                / float(scale)
+            )
+
+            points = self._resample_closed_contour(
+                points,
+                spacing=3.4,
+            )
+            if len(points) < 5:
+                continue
+
+            points = self._smooth_closed_contour(
+                points,
+                passes=3,
+            )
+            if len(points) < 3:
+                continue
+
+            simplified = self._simplify_smooth_closed_contour(
+                points,
+                tolerance=tolerance,
+                curvature_keep=0.14,
+                min_points=10,
+            )
+            if len(simplified) < 3:
+                continue
+
+            sampled = self._sample_closed_catmull_rom(
+                simplified,
+                tension=0.44,
+            )
+            if len(sampled) >= 3:
+                rings[contour_index] = sampled
+
+        return rings, hierarchy[0]
+
+    def _outline_mesh_data(self):
+        """
+        Triangulate the smooth compound outline into a true 2D triangle mesh.
+
+        Holes are preserved by building Shapely polygons from the OpenCV
+        contour hierarchy and using constrained Delaunay triangulation.
+        """
+        if not SHAPELY_AVAILABLE:
+            raise RuntimeError(
+                "Shapely fehlt. Bitte installieren mit: "
+                "python3 -m pip install shapely"
+            )
+
+        rings, hierarchy = self._outline_mesh_rings()
+        if not rings or hierarchy is None:
+            return {
+                "vertices": [],
+                "indices": [],
+            }
+
+        def contour_depth(index):
+            depth = 0
+            parent = int(hierarchy[index][3])
+            while parent >= 0:
+                depth += 1
+                parent = int(hierarchy[parent][3])
+            return depth
+
+        polygons = []
+
+        for contour_index, exterior_points in rings.items():
+            if contour_depth(contour_index) % 2 != 0:
+                continue
+
+            holes = []
+            for child_index, child_points in rings.items():
+                if (
+                    int(hierarchy[child_index][3]) == contour_index
+                    and contour_depth(child_index) % 2 == 1
+                ):
+                    holes.append(
+                        [
+                            (float(x), float(y))
+                            for x, y in child_points
+                        ]
+                    )
+
+            polygon = Polygon(
+                [
+                    (float(x), float(y))
+                    for x, y in exterior_points
+                ],
+                holes=holes,
+            )
+
+            if polygon.is_empty:
+                continue
+
+            if not polygon.is_valid:
+                polygon = make_valid(polygon)
+
+            if polygon.is_empty:
+                continue
+
+            if isinstance(polygon, Polygon):
+                polygons.append(polygon)
+            elif isinstance(polygon, MultiPolygon):
+                polygons.extend(list(polygon.geoms))
+            elif isinstance(polygon, GeometryCollection):
+                polygons.extend(
+                    geom
+                    for geom in polygon.geoms
+                    if isinstance(geom, Polygon)
+                )
+
+        vertices = []
+        indices = []
+        vertex_lookup = {}
+
+        def vertex_index(x, y):
+            # 1/10000 px quantization is only for deduplication.
+            key = (round(float(x), 4), round(float(y), 4))
+            existing = vertex_lookup.get(key)
+            if existing is not None:
+                return existing
+
+            index = len(vertices)
+            vertex_lookup[key] = index
+            vertices.append((float(x), float(y)))
+            return index
+
+        for polygon in polygons:
+            triangles = constrained_delaunay_triangles(polygon)
+
+            for triangle in triangles.geoms:
+                if not isinstance(triangle, Polygon):
+                    continue
+
+                coords = list(triangle.exterior.coords)
+                if len(coords) < 4:
+                    continue
+
+                # The constrained triangulator respects the polygon boundary,
+                # but keep this guard for repaired geometries.
+                if not polygon.covers(triangle):
+                    continue
+
+                tri = coords[:3]
+                tri_indices = [
+                    vertex_index(x, y)
+                    for x, y in tri
+                ]
+
+                # Skip degenerate triangles.
+                if len(set(tri_indices)) == 3:
+                    indices.extend(tri_indices)
+
+        return {
+            "vertices": vertices,
+            "indices": indices,
+        }
+
+    def _write_outline_mesh_binary(self, json_path):
+        """
+        Write a compact binary triangle mesh next to the Game JSON.
+
+        Binary format lcs_outline_mesh_v1:
+        - 4 bytes ASCII: LCSM
+        - uint32 version (1)
+        - uint32 vertex_count
+        - uint32 index_count
+        - vertex_count * (float32 x, float32 y)
+        - index_count * uint32
+        """
+        mesh = self._outline_mesh_data()
+
+        vertices = mesh["vertices"]
+        indices = mesh["indices"]
+
+        if not vertices or not indices:
+            return None
+
+        json_path = Path(json_path)
+        mesh_path = json_path.with_name(
+            f"{json_path.stem}_outline.meshbin"
+        )
+
+        with mesh_path.open("wb") as file:
+            file.write(b"LCSM")
+            file.write(
+                struct.pack(
+                    "<III",
+                    1,
+                    len(vertices),
+                    len(indices),
+                )
+            )
+
+            for x, y in vertices:
+                file.write(
+                    struct.pack(
+                        "<ff",
+                        float(x),
+                        float(y),
+                    )
+                )
+
+            for index in indices:
+                file.write(
+                    struct.pack(
+                        "<I",
+                        int(index),
+                    )
+                )
+
+        return {
+            "format": "lcs_outline_mesh_v1",
+            "file": mesh_path.name,
+            "vertex_count": len(vertices),
+            "index_count": len(indices),
+            "triangle_count": len(indices) // 3,
+            "size_bytes": mesh_path.stat().st_size,
+        }
+
     def export_game_json(self):
         """
         Export gameplay data for Godot.
 
         v3 separates responsibilities clearly:
-        - `regions` contains the actual gameplay geometry and region metadata.
+        - `regions.points` contains the exact gameplay / hit-test geometry.
+        - `regions.render_points` contains visual fill geometry with the same
+          controlled outline bleed used by the SVG export. This prevents the
+          page background from becoming visible between fills and the smoothed
+          vector outline.
         - `game_areas` contains logical gameplay units that reference one or
           more regions.
         - every active ungrouped region is exported as an implicit one-region
@@ -4342,6 +4691,13 @@ class ColoringRegionExtractor(tk.Tk):
                     "points": [
                         [float(x), float(y)]
                         for x, y in region.get("points", [])
+                    ],
+                    "render_points": [
+                        [float(x), float(y)]
+                        for x, y in self._svg_fill_points_with_outline_bleed(
+                            region,
+                            bleed_px=3,
+                        )
                     ],
                     "centroid": [
                         float(region["centroid"][0]),
@@ -4481,6 +4837,17 @@ class ColoringRegionExtractor(tk.Tk):
                 }
             )
 
+        outline_mesh_info = None
+        try:
+            outline_mesh_info = self._write_outline_mesh_binary(path)
+        except Exception as exc:
+            messagebox.showwarning(
+                "Vektor-Outline-Mesh",
+                "Das Game JSON wird gespeichert, aber das echte "
+                "Vektor-Outline-Mesh konnte nicht erzeugt werden.\n\n"
+                f"{exc}"
+            )
+
         data = {
             "format": "coloring_game_export_v3",
             "source": (
@@ -4496,6 +4863,7 @@ class ColoringRegionExtractor(tk.Tk):
             "palette": self.palette,
             "regions": regions_export,
             "game_areas": game_areas,
+            "outline_mesh": outline_mesh_info,
         }
 
         Path(path).write_text(
@@ -4507,10 +4875,18 @@ class ColoringRegionExtractor(tk.Tk):
             encoding="utf-8",
         )
 
+        mesh_text = ""
+        if outline_mesh_info:
+            mesh_text = (
+                f" | Outline-Mesh: "
+                f"{outline_mesh_info['triangle_count']} Dreiecke"
+            )
+
         self.status_var.set(
             f"Game JSON v3 gespeichert: {Path(path).name} | "
             f"{len(regions_export)} Regionen, "
             f"{len(game_areas)} Game Areas"
+            f"{mesh_text}"
         )
 
     def export_outline_png(self):
