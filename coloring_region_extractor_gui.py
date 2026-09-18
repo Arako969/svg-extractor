@@ -4642,7 +4642,11 @@ class ColoringRegionExtractor(tk.Tk):
         Export gameplay data for Godot.
 
         v3 separates responsibilities clearly:
-        - `regions` contains the actual gameplay geometry and region metadata.
+        - `regions.points` contains the exact gameplay / hit-test geometry.
+        - `regions.render_points` contains visual fill geometry with the same
+          controlled outline bleed used by the SVG export. This prevents the
+          page background from becoming visible between fills and the smoothed
+          vector outline.
         - `game_areas` contains logical gameplay units that reference one or
           more regions.
         - every active ungrouped region is exported as an implicit one-region
@@ -4687,6 +4691,13 @@ class ColoringRegionExtractor(tk.Tk):
                     "points": [
                         [float(x), float(y)]
                         for x, y in region.get("points", [])
+                    ],
+                    "render_points": [
+                        [float(x), float(y)]
+                        for x, y in self._svg_fill_points_with_outline_bleed(
+                            region,
+                            bleed_px=3,
+                        )
                     ],
                     "centroid": [
                         float(region["centroid"][0]),
