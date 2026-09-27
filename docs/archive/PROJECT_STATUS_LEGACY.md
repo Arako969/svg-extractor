@@ -1,6 +1,8 @@
-# PROJECT-STATUS
+> **Archiviert am 27.09.2026.** Dieses Dokument ist die unveränderte, historische Fassung der früheren `PROJECT-STATUS.md` (letzter Stand vor der Dokumentationsmigration). Es ist **nicht autoritativ** für den aktuellen Projektzustand — insbesondere ist der darin als „getestet, aber noch nicht gemerged“ beschriebene Game Export v3 inzwischen auf `main` gemergt, und die zusätzliche Vektor-Outline-Mesh-Funktion (PR #4) fehlt hier komplett, da sie erst danach entstand. Aktueller Stand: `../PROJECT_STATE.md`.
 
-Aktueller Stand: **v0.11.0**
+# PROJECT-STATUS (historisch, siehe Hinweis oben)
+
+Aktueller Stand zum Zeitpunkt dieses Dokuments: **v0.11.0**
 
 Dieses Dokument beschreibt den laufenden Entwicklungsstand des **Coloring Region Extractor** möglichst vollständig. Es ist bewusst detaillierter als `CHANGELOG.md`.
 

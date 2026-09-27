@@ -1,82 +1,64 @@
 # CLAUDE.md
 
-Diese Datei liefert Claude Code (claude.ai/code) Kontext für die Arbeit mit dem Code in diesem Repository.
+Diese Datei definiert den Einstieg für Claude Code in dieses Repository. Die Projektdokumentation befindet sich unter `docs/`.
+
+## Verbindlicher Start einer Arbeitssitzung
+
+Vor Änderungen am Projekt:
+
+1. `docs/PROJECT_STATE.md` lesen.
+2. `docs/AI_PROJECT_RULES.md` lesen.
+3. `docs/HANDOFF.md` lesen, wenn an laufender Arbeit angeknüpft wird.
+4. Nur die für die Aufgabe relevanten Dateien unter `docs/systems/` und `docs/decisions/` lesen.
+5. Den tatsächlich betroffenen Quellcode prüfen.
+
+Nicht pauschal alle historischen Dokumente lesen. `docs/archive/` dient ausschließlich der Historie.
+
+## Quellenpriorität
+
+Bei Widersprüchen gilt:
+
+1. verifizierter aktueller Quellcode und Projektkonfiguration
+2. `docs/PROJECT_STATE.md`
+3. `docs/ARCHITECTURE.md`
+4. relevante Systemdokumentation
+5. akzeptierte ADRs
+6. `docs/HANDOFF.md`
+7. `CHANGELOG.md`
+8. Archiv und historische Informationen
 
 ## Projekt
 
-Coloring Region Extractor: ein Single-File-Tkinter-Desktop-Tool, das schwarz-weiße Coloring-Book-Outline-Bilder (optional mit koloriertem Referenzbild) in vektorbasierte "Game Areas" für ein späteres Malen-nach-Zahlen-System in Godot umwandelt. Die vollständige Begründung, verworfene Ansätze und offene Designfragen stehen in `PROJECT-STATUS.md` — dieses Dokument ist deutlich detaillierter als diese Datei und sollte für alles Architektonische konsultiert werden, was hier nicht abgedeckt ist.
+Coloring Region Extractor: Python/Tkinter-Werkzeug zur Aufbereitung von Coloring-Book-Artwork für ein späteres Malen-nach-Zahlen-System in Godot.
+
+Zentrale Architekturentscheidung: Technische Region und Game Area sind getrennte Konzepte. Eine Game Area kann mehrere technische Regionen enthalten.
 
 ## Befehle
 
 ```bash
-# Abhängigkeiten installieren
 python3 -m pip install -r requirements.txt
-
-# App starten
 python3 coloring_region_extractor_gui.py
-
-# macOS-Finder-Launcher (prüft Python/Abhängigkeiten, startet dann die App)
 ./"Coloring Region Extractor.command"
 ```
 
-Es gibt in diesem Repo keine Testsuite, keinen Linter und keinen Build-Schritt — die Verifikation erfolgt manuell über die GUI.
+Laut bisheriger Dokumentation gibt es keine automatisierte Testsuite, keinen Linter und keinen Build-Schritt. Änderungen wurden bislang primär manuell über die GUI verifiziert. Vor jeder Annahme dazu den aktuellen Repository-Stand prüfen.
 
-## Architektur
+## Dokumentationspflege ist Teil der Aufgabe
 
-Alles befindet sich in einer einzigen Datei, `coloring_region_extractor_gui.py`, als eine einzelne Klasse `ColoringRegionExtractor(tk.Tk)` (~3700 Zeilen). `history/` enthält unveränderte Schnappschüsse vergangener Versionen (`_v1` … `_v10`) rein als Archiv — diese Dateien niemals bearbeiten; `v10` ist identisch mit dem aktuellen `coloring_region_extractor_gui.py`.
+Nach einer Änderung:
 
-### Kern-Datenmodell
+1. `docs/PROJECT_STATE.md` prüfen und bei geändertem Projektzustand aktualisieren.
+2. Betroffene Datei unter `docs/systems/` aktualisieren.
+3. `docs/ARCHITECTURE.md` nur bei Architekturänderungen aktualisieren.
+4. Bei bedeutenden technischen Entscheidungen eine ADR unter `docs/decisions/` anlegen oder aktualisieren.
+5. `docs/HANDOFF.md` auf den nächsten konkreten Arbeitsschritt setzen.
+6. `CHANGELOG.md` nur bei einem tatsächlichen Release aktualisieren.
+7. Abschließend auf Widersprüche zwischen Code und Dokumentation prüfen.
 
-- **Region** (`self.regions: list[dict]`): eine technische, geometrisch geschlossene Fläche, die in der Outline gefunden wurde. Wichtige Felder: `id`, `source_label` (Index in `self.labels` aus `connectedComponentsWithStats`, oder `None` bei Regionen ohne zugrunde liegende rohe Outline-Komponente), `is_recovered`, `is_manual`, `active`, `priority`.
-- **Priority** bestimmt, welche Region gewinnt, wenn sich Overlays an denselben Pixeln überlappen (höherer Wert gewinnt):
-  - `0` — normale Region, durch Standard-Erkennung der geschlossenen Outline gefunden
-  - `1` — farbbasierte Unterregion (aus einer größeren Outline-Region anhand der Farbvorlage herausgeschnitten, z. B. eine beige Pfote innerhalb eines orangefarbenen Hundekörpers)
-  - `2` — Recovery-Region (ausschließlich aus der Farbvorlage rekonstruiert, wenn die Outline dort gar keine geschlossene Region lieferte)
-  - `3` — manuell hinzugefügte Region (Nutzerklick über "Fehlende Fläche hinzufügen")
-- **Gruppe / Game Area** (`self.groups: dict[int, dict]`): die *spielerische* Einheit — eine oder mehrere Region-IDs (`region_ids`), die sich bei einem einzigen Klick gemeinsam einfärben, mit einer `color_id`, einer `label_position` und einer `target_color`. Technische Region und Game Area sind bewusst getrennte Konzepte; eine Game Area wird nie zu einem einzigen Polygon zusammengeführt (siehe PROJECT-STATUS.md §16 für die Begründung).
-- **Palette** (`self.palette: list[dict]`): im Lab-Farbraum geclusterte Farben, abgeleitet aus dem Farbreferenzbild; jede Region/Gruppe erhält eine `color_id`, die auf diese Palette verweist.
+Eine Aufgabe mit dokumentationsrelevanter Änderung ist erst fertig, wenn diese Pflege erfolgt ist.
 
-### Erkennungs-Pipeline (`analyze()` und verwandte Methoden)
+## Git
 
-1. Schwellenwert + morphologisches Closing auf der Graustufen-Outline → binäre Linienmaske.
-2. `connectedComponentsWithStats` auf der invertierten Maske → Basisregionen (priority 0).
-3. Optionaler zweiter Durchlauf ohne Lückenschließung für adaptive Mikroregionen (fängt winzige geschlossene Zellen ab, die Morphology sonst verschlucken würde).
-4. Falls eine Farbvorlage geladen ist: `split_selected_regions_by_color()` schneidet farbbasierte Unterregionen (priority 1) aus großen Outline-Regionen heraus; `recover_missing_regions_from_color()` rekonstruiert Regionen, die die Outline-Erkennung komplett verpasst hat (priority 2).
-5. `add_missing_region_at()` behandelt das manuelle Klick-zum-Hinzufügen-Werkzeug (priority 3), mit Fallback von bestehender Region → roher Outline-Komponente → Farbvorlagen-Insel.
+Details: `docs/GIT_WORKFLOW.md`.
 
-### UI-Aufbau
-
-Dreigeteiltes `ttk.Panedwindow`, aufgebaut in `_build_ui()`: scrollbare linke Sidebar (Analyse-/Farb-/Parameter-Steuerung), mittlere Canvas (zoom- und schwenkbare Vorschau über `_zoom_at`/`_do_pan`), rechte Sidebar (Auswahl, Gruppen-/Game-Area-Verwaltung, Export). Canvas-Klicks werden über `on_canvas_click()` je nach `self.mode_var` (`select` vs. Modus zum Hinzufügen fehlender Flächen) verarbeitet.
-
-### Exportformate (siehe PROJECT-STATUS.md §8–9 für das Ziel-Schema)
-
-- `export_svg()` — Game SVG mit zwei Ebenen: `<g id="game_areas">` (Farbflächen, mit kontrollierter Überdeckung unter die Outline) und `<g id="outlines">` (separate, distanzfeld-geglättete Vektor-Outline). Metadaten pro Region: `group-id`, `region-id`, `color-id`, Zielfarbe, Label-Position, `priority`, Recovered-/Manual-Flags.
-- `export_game_json()` — aktuell in Migration von v2 auf v3 (Branch `feature/game-export-v3`, siehe PROJECT-STATUS.md §8): `regions` enthält pro aktiver technischer Region die reine Gameplay-Geometrie (`points`, `centroid`, `area`, `bbox`, Farbe, Priorität, Overlay-Flags); `game_areas` enthält die spielerischen Einheiten — manuelle Gruppen (`is_implicit = false`, mehrere `region_ids`) und automatisch erzeugte Ein-Region-Game-Areas für nicht gruppierte aktive Regionen (`is_implicit = true`). Ziel: Godot parst für Gameplay-Geometrie kein SVG mehr, nur noch das JSON.
-- `export_outline_png()` — transparentes PNG nur mit der schwarzen Outline.
-- `export_preview()` — gerenderte Vorschau als PNG.
-- `save_project()` / `load_project()` — vollständiges Roundtrip des Editor-Zustands (`_project_data()`), unabhängig von den obigen Exportformaten.
-
-## Handoff-Dokumente
-
-`PROJECT-STATUS.md` und `DEVELOPMENT-HANDOFF.md` sind der Übergabemechanismus zwischen Chat-Sitzungen — sie ersetzen das Rekonstruieren der Konversationshistorie. Nach jeder größeren Arbeitseinheit (Feature abgeschlossen, wichtige Entscheidung getroffen, vor einem Sitzungswechsel):
-
-1. `PROJECT-STATUS.md` auf den aktuellen Stand bringen.
-2. `DEVELOPMENT-HANDOFF.md` auf den unmittelbar nächsten Arbeitsschritt setzen.
-3. Beides zusammen committen (siehe `GIT-WORKFLOW.md` Abschnitt "Handoff-Pflicht").
-
-Bei Sitzungsbeginn zuerst `DEVELOPMENT-HANDOFF.md` und `PROJECT-STATUS.md` lesen, bevor an der Aufgabe gearbeitet wird.
-
-## Versionierung & Git-Workflow
-
-Details in `GIT-WORKFLOW.md`; kurz zusammengefasst:
-
-- Semantic Versioning (`vMAJOR.MINOR.PATCH`), festgehalten in `VERSION` und als Git-Tag markiert (`v0.1.0` … aktuell).
-- `CHANGELOG.md` wird nur bei tatsächlichen Releases aktualisiert; `PROJECT-STATUS.md` wird zwischen Releases frei mit dem laufenden architektonischen/technischen Stand aktualisiert.
-- Branches: `main` (immer lauffähig), `feature/<name>`, `fix/<name>`, `chore/<name>`, per PR gemergt.
-- Commit-Nachrichten: kurzer deutscher Imperativ (z. B. `Farbbasierte Unterregionen ergänzen`).
-- Releases werden nur auf ausdrückliche Entscheidung hin geschnitten — nicht jeder Merge erhöht `VERSION`/`CHANGELOG.md`.
-
-## Hinweise
-
-- `Grafik Library/` (Quell-Artwork, PNGs) ist bewusst per `.gitignore` ausgeschlossen — große Binärassets, kein Teil des Tool-Quellcodes.
-- Deutsch ist durchgehend die Arbeitssprache: UI-Texte, Statusmeldungen, Commit-Nachrichten und Dokumentation. Neue nutzersichtbare Texte und Commit-Nachrichten entsprechend auf Deutsch halten, um zum bestehenden Stil zu passen.
+Commit-Nachrichten und Projektdokumentation bleiben deutsch. Datei- und Ordnernamen der Dokumentation bleiben englisch.
