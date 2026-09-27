@@ -101,7 +101,7 @@ class OutlineMeshGeometryTests(unittest.TestCase):
         self.assertTrue(np.isfinite(first).all())
         np.testing.assert_allclose(first, second, rtol=0.0, atol=0.0)
 
-    def test_sampling_keeps_current_curve_approximation_quality(self):
+    def test_adaptive_sampling_stays_within_zoom_error_budget(self):
         extractor = object.__new__(ColoringRegionExtractor)
         anchors = np.asarray(
             [
@@ -116,6 +116,7 @@ class OutlineMeshGeometryTests(unittest.TestCase):
         sampled = extractor._sample_closed_catmull_rom(
             anchors,
             tension=tension,
+            max_error=0.02,
         )
 
         factor = tension / 6.0
@@ -141,7 +142,53 @@ class OutlineMeshGeometryTests(unittest.TestCase):
                     _distance_to_closed_polyline(curve_point, sampled)
                 )
 
-        self.assertLess(max(deviations), 0.06)
+        self.assertLessEqual(max(deviations), 0.02)
+
+    def test_adaptive_sampling_uses_more_points_for_curved_segments(self):
+        extractor = object.__new__(ColoringRegionExtractor)
+
+        straight = extractor._sample_cubic_bezier_adaptive(
+            [0.0, 0.0],
+            [3.0, 0.0],
+            [7.0, 0.0],
+            [10.0, 0.0],
+            max_error=0.02,
+        )
+        curved = extractor._sample_cubic_bezier_adaptive(
+            [0.0, 0.0],
+            [0.0, 10.0],
+            [10.0, 10.0],
+            [10.0, 0.0],
+            max_error=0.02,
+        )
+
+        self.assertEqual(len(straight), 2)
+        self.assertGreater(len(curved), len(straight))
+        np.testing.assert_allclose(straight[0], [0.0, 0.0])
+        np.testing.assert_allclose(straight[-1], [10.0, 0.0])
+
+    def test_smaller_error_budget_increases_sampling_density(self):
+        extractor = object.__new__(ColoringRegionExtractor)
+        anchors = np.asarray(
+            [
+                [0.0, 0.0],
+                [16.0, 1.0],
+                [14.0, 11.0],
+                [2.0, 14.0],
+            ],
+            dtype=np.float64,
+        )
+
+        loose = extractor._sample_closed_catmull_rom(
+            anchors,
+            max_error=0.10,
+        )
+        strict = extractor._sample_closed_catmull_rom(
+            anchors,
+            max_error=0.02,
+        )
+
+        self.assertGreater(len(strict), len(loose))
 
     def test_empty_line_mask_creates_no_mesh(self):
         line_mask = np.zeros((64, 64), dtype=np.uint8)
