@@ -57,6 +57,31 @@ Nach einer Änderung:
 
 Eine Aufgabe mit dokumentationsrelevanter Änderung ist erst fertig, wenn diese Pflege erfolgt ist.
 
+## Externe Änderungsübergabe
+
+Ein Teil der Entwicklung dieses Projekts kann außerhalb von Claude Code stattfinden, insbesondere gemeinsam mit ChatGPT.
+Wenn eine Änderungsübergabe zusammen mit lokal übernommenen Codeänderungen bereitgestellt wird, gilt folgender Ablauf:
+
+1. Lies die Änderungsübergabe als Kontext für Ziel, Motivation und technische Entscheidungen der Änderung.
+2. Prüfe anschließend den tatsächlichen Source Code und den Git Diff.
+3. Bei Abweichungen zwischen Übergabe und tatsächlicher Implementierung haben der verifizierte Source Code, die Projektkonfiguration und der aktuelle Git Stand Vorrang.
+4. Bestimme anhand der tatsächlich implementierten Änderung, welche Projektdokumentation betroffen ist.
+5. Aktualisiere nur die Dokumentationsdateien, deren Inhalt sich tatsächlich geändert hat.
+6. Beachte dabei vollständig die Dokumentationsregeln aus `docs/AI_PROJECT_RULES.md`.
+7. Prüfe bei technischen oder architektonischen Entscheidungen, ob eine neue ADR notwendig ist oder eine bestehende Entscheidung betroffen ist.
+8. Führe nach der Aktualisierung einen Konsistenzcheck zwischen Code, Git Stand und betroffener Dokumentation durch.
+9. Führe anschließend den Git-Workflow ausschließlich gemäß `docs/GIT_WORKFLOW.md` durch.
+
+Die Änderungsübergabe ist keine autoritative Beschreibung des implementierten Zustands. Sie ergänzt den Source Code um Kontext, Zielsetzung und Begründungen.
+
+Nach Abschluss einer solchen Änderung kurz zusammenfassen:
+
+- welche Änderung tatsächlich erkannt wurde,
+- welche Dokumentationsdateien aktualisiert wurden,
+- ob eine ADR erstellt oder eine bestehende ADR betroffen war,
+- ob die Änderungsübergabe von der tatsächlichen Implementierung abwich,
+- welche Punkte gegebenenfalls nicht verifiziert werden konnten.
+
 ## Git
 
 Details: `docs/GIT_WORKFLOW.md`.
