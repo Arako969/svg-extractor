@@ -1,2 +1,4 @@
 .DS_Store
 Grafik Library/
+__pycache__/
+*.py[cod]
