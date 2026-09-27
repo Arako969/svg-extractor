@@ -80,6 +80,18 @@ Zusätzlich zu `regions` und `game_areas` schreibt `export_game_json()` ein tria
 
 Details zur Entscheidung: `../decisions/ADR-005-outline-mesh-for-godot.md`.
 
+### Automatisierte Geometrietests
+
+`tests/test_outline_mesh_geometry.py` deckt die Outline-Mesh-Pipeline als Regressionsschutz ab, bevor an der Kurvenglättung oder Konturerzeugung weitergearbeitet wird:
+
+- Deterministisches und endliches Catmull-Rom-Sampling (`_sample_closed_catmull_rom`).
+- Die aktuelle geometrische Näherungsqualität des Samplings gegenüber der kubischen Bezier-Kurve.
+- Verarbeitung einer leeren Linienmaske (`_outline_mesh_data()` liefert ein leeres Mesh).
+- Ein gültiges, degenerationsfreies Ring-Mesh mit erhaltener zentraler Aussparung.
+- Den binären `LCSM`-v1-Export (`_write_outline_mesh_binary()`) auf Byte-Ebene.
+
+Ausführung: `python3 -m unittest discover -s tests -v`, automatisiert per GitHub Actions (`.github/workflows/tests.yml`) bei Push/PR auf `main`.
+
 ### Verantwortlichkeiten
 
 - **JSON:** Gameplay-Geometrie (`points`), visuelle Füllgeometrie (`render_points`), Game-Area-Struktur, Farben, Labels, Prioritäten, Overlay-Metadaten sowie das triangulierte Outline-Mesh (`outline_mesh`).

@@ -39,9 +39,11 @@ Zentrale Architekturentscheidung: Technische Region und Game Area sind getrennte
 python3 -m pip install -r requirements.txt
 python3 coloring_region_extractor_gui.py
 ./"Coloring Region Extractor.command"
+python3 -m py_compile coloring_region_extractor_gui.py
+python3 -m unittest discover -s tests -v
 ```
 
-Laut bisheriger Dokumentation gibt es keine automatisierte Testsuite, keinen Linter und keinen Build-Schritt. Änderungen wurden bislang primär manuell über die GUI verifiziert. Vor jeder Annahme dazu den aktuellen Repository-Stand prüfen.
+Seit der `tests/`-Einführung existiert eine automatisierte Testsuite (Python `unittest`) für die Outline-Mesh-Geometrie, die per GitHub Actions (`.github/workflows/tests.yml`) bei Push/PR auf `main` ausgeführt wird. Es gibt weiterhin keinen Linter und keinen darüber hinausgehenden Build-Schritt. Änderungen, die nicht von der Testsuite abgedeckt sind, werden weiterhin primär manuell über die GUI verifiziert. Vor jeder Annahme dazu den aktuellen Repository-Stand prüfen.
 
 ## Dokumentationspflege ist Teil der Aufgabe
 

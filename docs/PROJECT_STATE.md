@@ -18,7 +18,7 @@ Beide sind bereits vollständig im Code auf `main` vorhanden (nicht mehr auf ein
 
 ## Aktueller Entwicklungszweig
 
-`main`. Es existiert aktuell kein offener Feature-Branch in diesem Repository.
+`main`. Zusätzlich existiert der offene Branch `chore/outline-mesh-tests` (PR ausstehend): automatisierte Geometrietests (`tests/test_outline_mesh_geometry.py`) für die Outline-Mesh-Pipeline sowie ein GitHub-Actions-Workflow (`.github/workflows/tests.yml`), der diese Tests bei Push/PR auf `main` ausführt. Ziel ist ein Regressionsschutz vor geplanten Änderungen an Kurvenglättung, Konturerzeugung und Mesh-Export. Keine Änderung an `coloring_region_extractor_gui.py`.
 
 ## Projektziel
 
@@ -61,11 +61,12 @@ Details: `systems/EXPORT_PIPELINE.md`, `decisions/ADR-003-json-gameplay-geometry
 
 ## Nächste Schritte
 
-1. Versionsentscheidung für den aktuellen `main`-Stand treffen (Game Export v3 + Outline-Mesh sind bereits gemergt und laut bisheriger Dokumentation getestet).
-2. `feature/godot-importer` beginnen: Godot Importer für Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) entwickeln.
-3. Klicklogik für Game Areas in Godot umsetzen.
-4. Performance mit komplexen Seiten testen.
-5. Die SVG-/Outline-Mesh-Pipeline an weiteren Motivtypen testen (offener Langzeittest, kein Blocker).
+1. `chore/outline-mesh-tests` mergen (automatisierte Geometrietests als Sicherheitsnetz vor Änderungen an Kurvenglättung/Konturerzeugung).
+2. Versionsentscheidung für den aktuellen `main`-Stand treffen (Game Export v3 + Outline-Mesh sind bereits gemergt und laut bisheriger Dokumentation getestet).
+3. `feature/godot-importer` beginnen: Godot Importer für Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) entwickeln.
+4. Klicklogik für Game Areas in Godot umsetzen.
+5. Performance mit komplexen Seiten testen.
+6. Die SVG-/Outline-Mesh-Pipeline an weiteren Motivtypen testen (offener Langzeittest, kein Blocker).
 
 ## Bekannte Grenzen
 

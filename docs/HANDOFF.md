@@ -13,7 +13,7 @@ Coloring Region Extractor für Cosy Desk - The Coloring Atelier.
 
 ## Aktueller Branch
 
-`main`. Kein offener Feature-Branch.
+`main` sowie der offene Branch `chore/outline-mesh-tests` (PR ausstehend).
 
 ## Zuletzt abgeschlossen
 
@@ -23,12 +23,13 @@ Coloring Region Extractor für Cosy Desk - The Coloring Atelier.
 
 ## Aktuell in Arbeit
 
-Kein offener Feature-Branch. `main` ist der aktuelle, vollständig gemergte Arbeitsstand.
+`chore/outline-mesh-tests` (PR ausstehend): automatisierte `unittest`-Geometrietests für die Outline-Mesh-Pipeline (`tests/test_outline_mesh_geometry.py`) und ein GitHub-Actions-Workflow (`.github/workflows/tests.yml`), der sie bei Push/PR auf `main` ausführt. Keine Änderung an `coloring_region_extractor_gui.py`. Ziel: Regressionsschutz vor geplanten Änderungen an Kurvenglättung, Konturerzeugung und Mesh-Export.
 
 ## Nächster Arbeitsschritt
 
-1. Versionsentscheidung für den `main`-Stand treffen (Game Export v3 und Outline-Mesh sind bereits gemergt und laut bisheriger Dokumentation getestet; `VERSION`/`CHANGELOG.md` sind noch nicht aktualisiert).
-2. Danach `feature/godot-importer` beginnen: Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) einlesen und daraus GameArea-Nodes mit Polygon2D-Children, Label sowie Farb-ID/Zielfarbe erzeugen.
+1. `chore/outline-mesh-tests` mergen.
+2. Versionsentscheidung für den `main`-Stand treffen (Game Export v3 und Outline-Mesh sind bereits gemergt und laut bisheriger Dokumentation getestet; `VERSION`/`CHANGELOG.md` sind noch nicht aktualisiert).
+3. Danach `feature/godot-importer` beginnen: Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) einlesen und daraus GameArea-Nodes mit Polygon2D-Children, Label sowie Farb-ID/Zielfarbe erzeugen.
 
 ## Ziel des folgenden Entwicklungsblocks
 

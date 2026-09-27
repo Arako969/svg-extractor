@@ -21,6 +21,16 @@ Die aktuelle Projektdokumentation befindet sich unter `docs/`.
 - `CHANGELOG.md`: ausschließlich veröffentlichte Releases
 - `CLAUDE.md`: Einstieg und Arbeitsregeln für Claude Code
 
+## Tests
+
+Automatisierte Geometrietests für die Outline-Mesh-Pipeline:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+Wird zusätzlich per GitHub Actions (`.github/workflows/tests.yml`) bei Push/PR auf `main` ausgeführt.
+
 ## Historische Releases
 
 Siehe `CHANGELOG.md`.
