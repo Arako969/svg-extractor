@@ -4,42 +4,27 @@ Werkzeug zur Aufbereitung von Coloring-Book-Artwork für ein späteres Godot-Mal
 
 ## Aktuelle Version
 
-Siehe [`VERSION`](VERSION). Der aktuelle historische Stand ist `0.10.0`.
+Die autoritative Release-Version steht in `VERSION`. Der zuletzt in der vorhandenen Dokumentation bestätigte Release ist `v0.11.0`.
+
+## Dokumentation
+
+Die aktuelle Projektdokumentation befindet sich unter `docs/`.
+
+- `docs/PROJECT_STATE.md`: aktueller Projektzustand
+- `docs/HANDOFF.md`: unmittelbarer Übergabestand und nächster Arbeitsschritt
+- `docs/ARCHITECTURE.md`: aktuelle Gesamtarchitektur
+- `docs/AI_PROJECT_RULES.md`: Regeln für KI-gestützte Arbeit und Dokumentationspflege
+- `docs/systems/`: aktuelle Dokumentation einzelner Systeme
+- `docs/decisions/`: Architekturentscheidungen
+- `docs/GIT_WORKFLOW.md`: Git- und Release-Ablauf
+- `docs/archive/`: historische, nicht autoritative Dokumentation
+- `CHANGELOG.md`: ausschließlich veröffentlichte Releases
+- `CLAUDE.md`: Einstieg und Arbeitsregeln für Claude Code
 
 ## Historische Releases
 
-| Release | Schwerpunkt |
-|---|---|
-| v0.1.0 | Erste GUI, Regionserkennung und Export |
-| v0.2.0 | Bildrand als Grenze |
-| v0.3.0 | Mehrfachauswahl und Game Areas |
-| v0.4.0 | Gruppen- und Projektworkflow |
-| v0.5.0 | Farbvorlage, Palette und Farb-IDs |
-| v0.6.0 | Farbbasierte Unterregionen |
-| v0.7.0 | Adaptive Mikroregionen |
-| v0.8.0 | Farbbasierte Wiederherstellung |
-| v0.9.0 | Fehlende Flächen per Klick ergänzen |
-| v0.10.0 | Zoom und dreigeteilte Oberfläche |
+Siehe `CHANGELOG.md`.
 
-## Dateien
+## Historische Dokumentation
 
-- `coloring_region_extractor_gui.py`: aktueller Stand
-- `VERSION`: aktuelle Release-Version
-- `CHANGELOG.md`: Release-Historie
-- `PROJECT-STATUS.md`: laufender Projektstand
-- `DEVELOPMENT-HANDOFF.md`: kompakte Momentaufnahme für den Wechsel in einen neuen Chat/eine neue Sitzung – nach jeder größeren Arbeitseinheit aktualisieren (siehe `GIT-WORKFLOW.md`)
-- `GIT-WORKFLOW.md`: Git- und Release-Ablauf
-- `CLAUDE.md`: Kontext für Claude Code
-- `history/`: unveränderte historische Python-Dateien
-
-## Alte Version ansehen
-
-```bash
-git checkout v0.5.0
-```
-
-Zurück zu `main`:
-
-```bash
-git checkout main
-```
+Die frühere monolithische `PROJECT-STATUS.md` wurde bei der Dokumentationsmigration nicht gelöscht. Sie liegt unverändert unter `docs/archive/PROJECT_STATUS_LEGACY.md` und dient ausschließlich als historische Referenz.
