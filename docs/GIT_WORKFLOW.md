@@ -64,10 +64,23 @@ git diff main...HEAD
 gh pr create --fill
 ```
 
-Nach ausdrücklicher Bestätigung:
+Danach die Merge-Bereitschaft des PR prüfen (Mergeable-Status, CI-Checks, offene Reviews) und das Ergebnis mitteilen.
+
+Der finale Merge nach `main` erfolgt standardmäßig manuell durch den Projektinhaber, z. B. über die GitHub-Oberfläche oder selbst ausgeführt mit:
 
 ```bash
 gh pr merge --squash --delete-branch
+```
+
+## Nach dem manuellen Merge
+
+Nach einem manuell durchgeführten Merge den lokalen Stand aktualisieren und aufräumen:
+
+```bash
+git checkout main
+git pull
+git branch -d feature/<kurzname>
+git fetch --prune
 ```
 
 ## Release
