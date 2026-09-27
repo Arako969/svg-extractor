@@ -1,7 +1,7 @@
 # Projektstatus
 
 Letzte Migration der Dokumentation: 27.09.2026
-Letzte Verifikation gegen Quellcode und Git-Historie: 27.09.2026
+Letzte Verifikation gegen Quellcode und Git-Historie: 27.09.2026 (PR #5–#8)
 
 ## Aktueller Release (VERSION / CHANGELOG)
 
@@ -9,18 +9,18 @@ Letzte Verifikation gegen Quellcode und Git-Historie: 27.09.2026
 
 ## Stand auf `main` (verifiziert)
 
-`main` enthält gegenüber dem Tag `v0.11.0` bereits zwei weitere gemergte Arbeitseinheiten, die noch nicht versioniert bzw. veröffentlicht wurden:
+`main` enthält gegenüber dem Tag `v0.11.0` bereits vier weitere gemergte Arbeitseinheiten, die noch nicht versioniert bzw. veröffentlicht wurden (eine davon, PR #6, ist reine Testinfrastruktur ohne Versionsrelevanz):
 
 1. **Game Export v3** (PR #3, Commit `bcc13d9`, gemergt 2026-09-18).
 2. **Vektor-Outline-Mesh & Render-Geometrie für Godot** (PR #4, Commit `9c2dd17`, gemergt 2026-09-19).
+3. **Outline-Mesh mit automatisierten Geometrietests abgesichert** (PR #6, Commit `4073709`, gemergt 2026-09-27): `tests/test_outline_mesh_geometry.py` sowie ein GitHub-Actions-Workflow (`.github/workflows/tests.yml`), der diese Tests bei Push/PR auf `main` ausführt. Keine Änderung an `coloring_region_extractor_gui.py`; reine Testinfrastruktur, keine Versionsrelevanz.
+4. **Outline-Mesh adaptiv tessellieren** (PR #8, Commit `9b970b4`, gemergt 2026-09-27): ersetzt die feste Schrittabtastung der Catmull-Rom-Segmente im Outline-Mesh durch adaptive, fehlerbasierte De-Casteljau-Tessellierung (`_sample_cubic_bezier_adaptive`, Fehlerbudget `0.02 px`, max. Tiefe `16`), damit die Outline auch bei starkem Zoom (bis 24-fach) glatt bleibt. Betrifft nur das triangulierte Godot-Outline-Mesh, nicht den SVG-Export. Testsuite auf 7 Tests erweitert. Der laut Branch-Dokumentation vor dem Merge vorgesehene manuelle visuelle Test (Hundemotiv, Godot-VectorColoringTest, 24-facher Zoom) lässt sich aus dem Repository allein nicht verifizieren.
 
-Beide sind bereits vollständig im Code auf `main` vorhanden (nicht mehr auf einem separaten Feature-Branch). `VERSION` und `CHANGELOG.md` wurden dafür noch nicht aktualisiert; eine Versionsentscheidung steht noch aus (siehe `GIT_WORKFLOW.md`, Abschnitt Release: nur auf ausdrückliche Entscheidung).
-
-Zusätzlich wurde **PR #6 "Outline-Mesh mit automatisierten Geometrietests absichern"** (Branch `chore/outline-mesh-tests`) gemergt: automatisierte Geometrietests (`tests/test_outline_mesh_geometry.py`) für die Outline-Mesh-Pipeline sowie ein GitHub-Actions-Workflow (`.github/workflows/tests.yml`), der diese Tests bei Push/PR auf `main` ausführt. Keine Änderung an `coloring_region_extractor_gui.py`; reine Testinfrastruktur, keine Versionsrelevanz.
+Alle vier sind vollständig im Code auf `main` vorhanden; es existiert kein offener Feature-Branch mehr dafür. `VERSION` und `CHANGELOG.md` wurden für die produktrelevanten Änderungen (1, 2, 4) noch nicht aktualisiert; eine Versionsentscheidung steht noch aus (siehe `GIT_WORKFLOW.md`, Abschnitt Release: nur auf ausdrückliche Entscheidung).
 
 ## Aktueller Entwicklungszweig
 
-`main`. Zusätzlich existiert der offene Branch `fix/adaptive-outline-mesh` (PR ausstehend): ersetzt die feste Schrittabtastung der Catmull-Rom-Segmente im Outline-Mesh durch adaptive, fehlerbasierte De-Casteljau-Tessellierung (`_sample_cubic_bezier_adaptive`, Fehlerbudget `0.02 px`, max. Tiefe `16`). Betrifft nur das triangulierte Godot-Outline-Mesh, nicht den SVG-Export. Vor dem Merge steht noch ein manueller visueller Test aus (Hundemotiv, Godot-VectorColoringTest bei 24-fachem Zoom).
+`main`. Es existiert aktuell kein offener Feature-Branch in diesem Repository.
 
 ## Projektziel
 
@@ -57,18 +57,18 @@ Die Pipeline soll aus einer Illustration technische Regionen erzeugen, Korrektur
 
 - **Game Export v3**: explizite Gameplay-Geometrie (`regions[].points`) und einheitliche Game-Area-Struktur (`game_areas`, inklusive impliziter Ein-Region-Game-Areas über `is_implicit`) im Game JSON.
 - **Render-Geometrie**: `regions[].render_points` mit derselben Outline-Überdeckung (`bleed_px=3`), die der SVG-Export verwendet.
-- **Vektor-Outline-Mesh**: trianguliertes Binärformat `*_outline.meshbin` (`lcs_outline_mesh_v1`) für Godot, benötigt `shapely`; bei fehlender Abhängigkeit wird das Game JSON dennoch gespeichert (`outline_mesh: null`, Warnhinweis in der GUI).
+- **Vektor-Outline-Mesh**: trianguliertes Binärformat `*_outline.meshbin` (`lcs_outline_mesh_v1`) für Godot, benötigt `shapely`; bei fehlender Abhängigkeit wird das Game JSON dennoch gespeichert (`outline_mesh: null`, Warnhinweis in der GUI). Seit PR #8 mit fehlerbasierter adaptiver Tessellierung (`_sample_cubic_bezier_adaptive`, Fehlerbudget `0.02 px`) statt fester Schrittabtastung.
+- **Automatisierte Geometrietests** (PR #6, nicht versionsrelevant): `tests/test_outline_mesh_geometry.py` (7 Tests) und GitHub-Actions-Workflow `.github/workflows/tests.yml` bei Push/PR auf `main`.
 
 Details: `systems/EXPORT_PIPELINE.md`, `decisions/ADR-003-json-gameplay-geometry.md`, `decisions/ADR-005-outline-mesh-for-godot.md`.
 
 ## Nächste Schritte
 
-1. `fix/adaptive-outline-mesh` visuell prüfen (Hundemotiv, Godot-VectorColoringTest, 24-facher Zoom) und mergen.
-2. Versionsentscheidung für den aktuellen `main`-Stand treffen (Game Export v3 + Outline-Mesh sind bereits gemergt und laut bisheriger Dokumentation getestet).
-3. `feature/godot-importer` beginnen: Godot Importer für Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) entwickeln.
-4. Klicklogik für Game Areas in Godot umsetzen.
-5. Performance mit komplexen Seiten testen.
-6. Die SVG-/Outline-Mesh-Pipeline an weiteren Motivtypen testen (offener Langzeittest, kein Blocker).
+1. Versionsentscheidung für den aktuellen `main`-Stand treffen (Game Export v3, Outline-Mesh und dessen adaptive Tessellierung sind bereits gemergt und laut bisheriger Dokumentation getestet).
+2. `feature/godot-importer` beginnen: Godot Importer für Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) entwickeln.
+3. Klicklogik für Game Areas in Godot umsetzen.
+4. Performance mit komplexen Seiten testen.
+5. Die SVG-/Outline-Mesh-Pipeline an weiteren Motivtypen testen (offener Langzeittest, kein Blocker).
 
 ## Bekannte Grenzen
 
