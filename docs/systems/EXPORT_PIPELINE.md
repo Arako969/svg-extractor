@@ -78,7 +78,7 @@ Zusätzlich zu `regions` und `game_areas` schreibt `export_game_json()` ein tria
 - Das Game JSON referenziert das Ergebnis über das Feld `outline_mesh` (`format`, `file`, `vertex_count`, `index_count`, `triangle_count`, `size_bytes`).
 - Fehlt `shapely` oder schlägt die Triangulierung fehl, wird das Game JSON trotzdem gespeichert (`outline_mesh: null`); die GUI zeigt dazu eine Warnung.
 
-Details zur Entscheidung: `decisions/ADR-005-outline-mesh-for-godot.md`.
+Details zur Entscheidung: `../decisions/ADR-005-outline-mesh-for-godot.md`.
 
 ### Verantwortlichkeiten
 

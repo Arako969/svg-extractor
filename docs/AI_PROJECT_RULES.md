@@ -13,11 +13,11 @@ Diese Regeln gelten für Claude Code und andere KI-Assistenten, die am Repositor
 Wenn zwei Quellen unterschiedliche Aussagen zum aktuellen Projektzustand enthalten, gilt folgende Priorität:
 
 1. Verifizierter aktueller Quellcode und aktuelle Projektkonfiguration
-2. `docs/PROJECT_STATE.md`
-3. `docs/ARCHITECTURE.md`
+2. `PROJECT_STATE.md`
+3. `ARCHITECTURE.md`
 4. relevante Dateien unter `docs/systems/`
 5. akzeptierte ADRs unter `docs/decisions/`
-6. `docs/HANDOFF.md` für den unmittelbaren Arbeitsstand
+6. `HANDOFF.md` für den unmittelbaren Arbeitsstand
 7. `CHANGELOG.md` für veröffentlichte Historie
 8. archivierte oder historische Dokumentation
 
@@ -25,9 +25,9 @@ Historische Dokumente dürfen niemals einen verifizierten aktuellen Zustand übe
 
 ## Vor Beginn einer Aufgabe
 
-1. `docs/PROJECT_STATE.md` lesen.
-2. `docs/HANDOFF.md` lesen, wenn die Aufgabe an laufende Arbeit anknüpft.
-3. `docs/ARCHITECTURE.md` lesen, wenn Architektur betroffen ist.
+1. `PROJECT_STATE.md` lesen.
+2. `HANDOFF.md` lesen, wenn die Aufgabe an laufende Arbeit anknüpft.
+3. `ARCHITECTURE.md` lesen, wenn Architektur betroffen ist.
 4. Nur die für die Aufgabe relevanten Dateien unter `docs/systems/` und `docs/decisions/` lesen.
 5. Betroffenen Quellcode prüfen, bevor Annahmen aus Dokumentation übernommen werden.
 6. Bei einem Widerspruch zwischen Dokumentation und Code den Widerspruch ausdrücklich behandeln und nicht stillschweigend raten.
@@ -45,11 +45,11 @@ Eine Aufgabe, die dokumentiertes Verhalten, Architektur, Exportformate, Datenmod
 
 ## Nach Abschluss einer Aufgabe
 
-1. Prüfen, ob `docs/PROJECT_STATE.md` geändert werden muss.
+1. Prüfen, ob `PROJECT_STATE.md` geändert werden muss.
 2. Betroffene Systemdokumentation aktualisieren.
-3. `docs/ARCHITECTURE.md` nur bei tatsächlichen Architekturänderungen aktualisieren.
+3. `ARCHITECTURE.md` nur bei tatsächlichen Architekturänderungen aktualisieren.
 4. Bei einer neuen bedeutenden technischen Entscheidung eine ADR anlegen.
-5. `docs/HANDOFF.md` auf den unmittelbar nächsten Arbeitsschritt aktualisieren.
+5. `HANDOFF.md` auf den unmittelbar nächsten Arbeitsschritt aktualisieren.
 6. `CHANGELOG.md` nur bei einem tatsächlichen Release aktualisieren.
 7. Dokumentation auf neu entstandene Widersprüche prüfen.
 8. Ersetzte Ansätze als veraltet markieren oder ins Archiv verschieben, statt sie als parallel aktuellen Zustand stehen zu lassen.
