@@ -78,6 +78,15 @@ Zusätzlich zu `regions` und `game_areas` schreibt `export_game_json()` ein tria
 - Das Game JSON referenziert das Ergebnis über das Feld `outline_mesh` (`format`, `file`, `vertex_count`, `index_count`, `triangle_count`, `size_bytes`).
 - Fehlt `shapely` oder schlägt die Triangulierung fehl, wird das Game JSON trotzdem gespeichert (`outline_mesh: null`); die GUI zeigt dazu eine Warnung.
 
+#### Adaptive Tessellierung der Mesh-Kontur
+
+Die Catmull-Rom-Segmente innerhalb von `_outline_mesh_rings()` werden für das Outline-Mesh nicht mehr mit einer festen Schrittzahl abgetastet, sondern über `_sample_cubic_bezier_adaptive()` fehlerbasiert unterteilt (De-Casteljau-Verfahren, `_sample_closed_catmull_rom(..., max_error=0.02)`):
+
+- Standard-Fehlerbudget `0.02 px`, maximale Unterteilungstiefe `16`.
+- Gerade Kurvenabschnitte erzeugen kaum Punkte, gekrümmte Abschnitte werden bis zum Erreichen der Toleranz unterteilt.
+- Betrifft ausschließlich das triangulierte Outline-Mesh für Godot; der SVG-Outline-Export (`_closed_catmull_rom_svg_path()`) bleibt unverändert, da SVG kubische Bezier-Kurven nativ ohne Abtastung darstellt.
+- Ziel: sichtbar glatte Outline auch bei starkem Zoom (getestet bis 24-fach) ohne unnötig dichte Vertex-Verteilung in ruhigen Konturbereichen.
+
 Details zur Entscheidung: `../decisions/ADR-005-outline-mesh-for-godot.md`.
 
 ### Automatisierte Geometrietests
@@ -85,7 +94,9 @@ Details zur Entscheidung: `../decisions/ADR-005-outline-mesh-for-godot.md`.
 `tests/test_outline_mesh_geometry.py` deckt die Outline-Mesh-Pipeline als Regressionsschutz ab, bevor an der Kurvenglättung oder Konturerzeugung weitergearbeitet wird:
 
 - Deterministisches und endliches Catmull-Rom-Sampling (`_sample_closed_catmull_rom`).
-- Die aktuelle geometrische Näherungsqualität des Samplings gegenüber der kubischen Bezier-Kurve.
+- Die adaptive Abtastung hält das Fehlerbudget (`max_error`) gegenüber der kubischen Bezier-Kurve ein.
+- Gekrümmte Segmente erhalten mehr Abtastpunkte als gerade Segmente (`_sample_cubic_bezier_adaptive`).
+- Ein kleineres Fehlerbudget erhöht die Abtastdichte.
 - Verarbeitung einer leeren Linienmaske (`_outline_mesh_data()` liefert ein leeres Mesh).
 - Ein gültiges, degenerationsfreies Ring-Mesh mit erhaltener zentraler Aussparung.
 - Den binären `LCSM`-v1-Export (`_write_outline_mesh_binary()`) auf Byte-Ebene.

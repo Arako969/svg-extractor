@@ -4303,12 +4303,92 @@ class ColoringRegionExtractor(tk.Tk):
             f"Game SVG mit Vektor-Outline gespeichert: {Path(path).name}"
         )
 
-    def _sample_closed_catmull_rom(self, points, tension=0.44):
+    def _sample_cubic_bezier_adaptive(
+        self,
+        p0,
+        c1,
+        c2,
+        p3,
+        max_error=0.02,
+        max_depth=16,
+    ):
+        """
+        Flatten one cubic Bezier segment within a geometric error bound.
+
+        De Casteljau subdivision is continued until both inner control points
+        are close enough to the segment chord. Because a Bezier curve remains
+        inside the convex hull of its control polygon, this is a conservative
+        and deterministic flatness criterion.
+
+        ``max_error=0.02`` keeps the deviation below roughly half a screen
+        pixel at 24x zoom while calm curve sections need very few vertices.
+        """
+        start = np.asarray(p0, dtype=np.float64)
+        control_1 = np.asarray(c1, dtype=np.float64)
+        control_2 = np.asarray(c2, dtype=np.float64)
+        end = np.asarray(p3, dtype=np.float64)
+        tolerance = max(1e-6, float(max_error))
+        depth_limit = max(1, int(max_depth))
+
+        sampled = [start]
+        stack = [(
+            start,
+            control_1,
+            control_2,
+            end,
+            0,
+        )]
+
+        while stack:
+            a, b, c, d, depth = stack.pop()
+            flatness = max(
+                self._point_segment_distance(b, a, d),
+                self._point_segment_distance(c, a, d),
+            )
+
+            if flatness <= tolerance or depth >= depth_limit:
+                sampled.append(d)
+                continue
+
+            ab = (a + b) * 0.5
+            bc = (b + c) * 0.5
+            cd = (c + d) * 0.5
+            abc = (ab + bc) * 0.5
+            bcd = (bc + cd) * 0.5
+            midpoint = (abc + bcd) * 0.5
+            next_depth = depth + 1
+
+            # LIFO stack: add the right half first so points remain ordered.
+            stack.append((
+                midpoint,
+                bcd,
+                cd,
+                d,
+                next_depth,
+            ))
+            stack.append((
+                a,
+                ab,
+                abc,
+                midpoint,
+                next_depth,
+            ))
+
+        return np.asarray(sampled, dtype=np.float64)
+
+    def _sample_closed_catmull_rom(
+        self,
+        points,
+        tension=0.44,
+        max_error=0.02,
+    ):
         """
         Sample the same cubic curve used by the SVG outline export.
 
-        The result is a dense polygonal approximation used only for the
-        pre-triangulated Godot outline mesh. The SVG itself remains unchanged.
+        The result is an adaptive polygonal approximation used only for the
+        pre-triangulated Godot outline mesh. Straight sections use few points;
+        curved sections are subdivided until ``max_error`` is reached. The SVG
+        itself remains unchanged.
         """
         pts = np.asarray(points, dtype=np.float64)
 
@@ -4338,20 +4418,17 @@ class ColoringRegionExtractor(tk.Tk):
             c1 = p1 + (p2 - p0) * factor
             c2 = p2 - (p3 - p1) * factor
 
-            chord = float(np.linalg.norm(p2 - p1))
-            steps = max(3, min(14, int(np.ceil(chord / 1.25))))
+            segment = self._sample_cubic_bezier_adaptive(
+                p1,
+                c1,
+                c2,
+                p2,
+                max_error=max_error,
+            )
 
-            for step in range(steps):
-                t = step / float(steps)
-                u = 1.0 - t
-
-                point = (
-                    (u ** 3) * p1
-                    + 3.0 * (u ** 2) * t * c1
-                    + 3.0 * u * (t ** 2) * c2
-                    + (t ** 3) * p2
-                )
-                sampled.append(point)
+            # The segment endpoint is the next segment's start point. Keeping
+            # it only there avoids duplicate vertices in the closed ring.
+            sampled.extend(segment[:-1])
 
         return np.asarray(sampled, dtype=np.float64)
 
