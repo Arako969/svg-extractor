@@ -13,7 +13,7 @@ Coloring Region Extractor für Cosy Desk - The Coloring Atelier.
 
 ## Aktueller Branch
 
-`main`. Kein offener Feature-Branch.
+`main` sowie der offene Branch `fix/adaptive-outline-mesh` (PR ausstehend).
 
 ## Zuletzt abgeschlossen
 
@@ -24,12 +24,15 @@ Coloring Region Extractor für Cosy Desk - The Coloring Atelier.
 
 ## Aktuell in Arbeit
 
-Kein offener Feature-Branch. `main` ist der aktuelle, vollständig gemergte Arbeitsstand.
+`fix/adaptive-outline-mesh` (PR ausstehend): feste Schrittabtastung der Catmull-Rom-Segmente im Outline-Mesh durch adaptive, fehlerbasierte De-Casteljau-Tessellierung ersetzt (`_sample_cubic_bezier_adaptive`, Fehlerbudget `0.02 px`, max. Tiefe `16`), damit die Outline auch bei starkem Zoom (bis 24-fach) glatt bleibt. Testsuite auf 7 Tests erweitert. Betrifft nur das Godot-Outline-Mesh, nicht den SVG-Export.
+
+**Offen vor Merge:** Hundemotiv erneut exportieren und im Godot-VectorColoringTest bei 24-fachem Zoom visuell prüfen (manueller Schritt, nicht durch Claude Code verifizierbar).
 
 ## Nächster Arbeitsschritt
 
-1. Versionsentscheidung für den `main`-Stand treffen (Game Export v3 und Outline-Mesh sind bereits gemergt und laut bisheriger Dokumentation getestet; `VERSION`/`CHANGELOG.md` sind noch nicht aktualisiert).
-2. Danach `feature/godot-importer` beginnen: Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) einlesen und daraus GameArea-Nodes mit Polygon2D-Children, Label sowie Farb-ID/Zielfarbe erzeugen.
+1. Visuelle Prüfung von `fix/adaptive-outline-mesh` im Godot-VectorColoringTest durchführen, danach mergen.
+2. Versionsentscheidung für den `main`-Stand treffen (Game Export v3 und Outline-Mesh sind bereits gemergt und laut bisheriger Dokumentation getestet; `VERSION`/`CHANGELOG.md` sind noch nicht aktualisiert).
+3. Danach `feature/godot-importer` beginnen: Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) einlesen und daraus GameArea-Nodes mit Polygon2D-Children, Label sowie Farb-ID/Zielfarbe erzeugen.
 
 ## Ziel des folgenden Entwicklungsblocks
 

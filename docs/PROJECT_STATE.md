@@ -20,7 +20,7 @@ Zusätzlich wurde **PR #6 "Outline-Mesh mit automatisierten Geometrietests absic
 
 ## Aktueller Entwicklungszweig
 
-`main`. Es existiert aktuell kein offener Feature-Branch in diesem Repository.
+`main`. Zusätzlich existiert der offene Branch `fix/adaptive-outline-mesh` (PR ausstehend): ersetzt die feste Schrittabtastung der Catmull-Rom-Segmente im Outline-Mesh durch adaptive, fehlerbasierte De-Casteljau-Tessellierung (`_sample_cubic_bezier_adaptive`, Fehlerbudget `0.02 px`, max. Tiefe `16`). Betrifft nur das triangulierte Godot-Outline-Mesh, nicht den SVG-Export. Vor dem Merge steht noch ein manueller visueller Test aus (Hundemotiv, Godot-VectorColoringTest bei 24-fachem Zoom).
 
 ## Projektziel
 
@@ -63,11 +63,12 @@ Details: `systems/EXPORT_PIPELINE.md`, `decisions/ADR-003-json-gameplay-geometry
 
 ## Nächste Schritte
 
-1. Versionsentscheidung für den aktuellen `main`-Stand treffen (Game Export v3 + Outline-Mesh sind bereits gemergt und laut bisheriger Dokumentation getestet).
-2. `feature/godot-importer` beginnen: Godot Importer für Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) entwickeln.
-3. Klicklogik für Game Areas in Godot umsetzen.
-4. Performance mit komplexen Seiten testen.
-5. Die SVG-/Outline-Mesh-Pipeline an weiteren Motivtypen testen (offener Langzeittest, kein Blocker).
+1. `fix/adaptive-outline-mesh` visuell prüfen (Hundemotiv, Godot-VectorColoringTest, 24-facher Zoom) und mergen.
+2. Versionsentscheidung für den aktuellen `main`-Stand treffen (Game Export v3 + Outline-Mesh sind bereits gemergt und laut bisheriger Dokumentation getestet).
+3. `feature/godot-importer` beginnen: Godot Importer für Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) entwickeln.
+4. Klicklogik für Game Areas in Godot umsetzen.
+5. Performance mit komplexen Seiten testen.
+6. Die SVG-/Outline-Mesh-Pipeline an weiteren Motivtypen testen (offener Langzeittest, kein Blocker).
 
 ## Bekannte Grenzen
 
