@@ -1,7 +1,7 @@
 # Entwicklungsübergabe
 
 Letzte Migration der Dokumentation: 27.09.2026
-Letzte Verifikation gegen Quellcode und Git-Historie: 27.09.2026
+Letzte Verifikation gegen Quellcode und Git-Historie: 27.09.2026 (PR #5–#8)
 
 ## Projekt
 
@@ -13,26 +13,24 @@ Coloring Region Extractor für Cosy Desk - The Coloring Atelier.
 
 ## Aktueller Branch
 
-`main` sowie der offene Branch `fix/adaptive-outline-mesh` (PR ausstehend).
+`main`. Kein offener Feature-Branch.
 
 ## Zuletzt abgeschlossen
 
 - **`v0.11.0` (released):** SVG-Outline-Export überarbeitet — separate Vektor-Outline-Ebene, Distanzfeld-basierte Glättung, krümmungsabhängige Vereinfachung, einstellbare Pixel-Toleranz, kontrollierte Fill-Überdeckung, Exportstatistiken.
 - **Auf `main` gemergt, noch nicht versioniert:** Game Export v3 (`coloring_game_export_v3`, PR #3, `bcc13d9`) — explizite Gameplay-Geometrie (`points`) und einheitliche Game-Area-Struktur (`game_areas`, `is_implicit`) im JSON.
 - **Auf `main` gemergt, noch nicht versioniert:** Vektor-Outline-Mesh & Render-Geometrie für Godot (PR #4, `9c2dd17`) — `render_points` pro Region sowie ein trianguliertes, binäres Outline-Mesh (`*_outline.meshbin`, Format `lcs_outline_mesh_v1`); benötigt die neue Abhängigkeit `shapely` (bereits in `requirements.txt`).
-- **Auf `main` gemergt (PR #6):** Outline-Mesh mit automatisierten Geometrietests abgesichert — `tests/test_outline_mesh_geometry.py` (Catmull-Rom-Sampling, Näherungsqualität, leere Linienmaske, Ring-Mesh mit Aussparung, `LCSM v1`-Export) und GitHub-Actions-Workflow (`.github/workflows/tests.yml`) bei Push/PR auf `main`. Keine Änderung an `coloring_region_extractor_gui.py`; reine Testinfrastruktur.
+- **Auf `main` gemergt (PR #6, nicht versionsrelevant):** Outline-Mesh mit automatisierten Geometrietests abgesichert — `tests/test_outline_mesh_geometry.py` (Catmull-Rom-Sampling, Näherungsqualität, leere Linienmaske, Ring-Mesh mit Aussparung, `LCSM v1`-Export) und GitHub-Actions-Workflow (`.github/workflows/tests.yml`) bei Push/PR auf `main`. Keine Änderung an `coloring_region_extractor_gui.py`; reine Testinfrastruktur.
+- **Auf `main` gemergt, noch nicht versioniert:** Outline-Mesh adaptiv tessellieren (PR #8, `9b970b4`) — feste Schrittabtastung der Catmull-Rom-Segmente im Outline-Mesh durch adaptive, fehlerbasierte De-Casteljau-Tessellierung ersetzt (`_sample_cubic_bezier_adaptive`, Fehlerbudget `0.02 px`, max. Tiefe `16`), damit die Outline auch bei starkem Zoom (bis 24-fach) glatt bleibt. Testsuite auf 7 Tests erweitert. Betrifft nur das Godot-Outline-Mesh, nicht den SVG-Export. Der laut Branch-Dokumentation vor dem Merge vorgesehene manuelle visuelle Test (Hundemotiv, Godot-VectorColoringTest, 24-facher Zoom) lässt sich aus dem Repository allein nicht verifizieren.
 
 ## Aktuell in Arbeit
 
-`fix/adaptive-outline-mesh` (PR ausstehend): feste Schrittabtastung der Catmull-Rom-Segmente im Outline-Mesh durch adaptive, fehlerbasierte De-Casteljau-Tessellierung ersetzt (`_sample_cubic_bezier_adaptive`, Fehlerbudget `0.02 px`, max. Tiefe `16`), damit die Outline auch bei starkem Zoom (bis 24-fach) glatt bleibt. Testsuite auf 7 Tests erweitert. Betrifft nur das Godot-Outline-Mesh, nicht den SVG-Export.
-
-**Offen vor Merge:** Hundemotiv erneut exportieren und im Godot-VectorColoringTest bei 24-fachem Zoom visuell prüfen (manueller Schritt, nicht durch Claude Code verifizierbar).
+Kein offener Feature-Branch. `main` ist der aktuelle, vollständig gemergte Arbeitsstand.
 
 ## Nächster Arbeitsschritt
 
-1. Visuelle Prüfung von `fix/adaptive-outline-mesh` im Godot-VectorColoringTest durchführen, danach mergen.
-2. Versionsentscheidung für den `main`-Stand treffen (Game Export v3 und Outline-Mesh sind bereits gemergt und laut bisheriger Dokumentation getestet; `VERSION`/`CHANGELOG.md` sind noch nicht aktualisiert).
-3. Danach `feature/godot-importer` beginnen: Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) einlesen und daraus GameArea-Nodes mit Polygon2D-Children, Label sowie Farb-ID/Zielfarbe erzeugen.
+1. Versionsentscheidung für den `main`-Stand treffen (Game Export v3, Outline-Mesh und dessen adaptive Tessellierung sind bereits gemergt und laut bisheriger Dokumentation getestet; `VERSION`/`CHANGELOG.md` sind noch nicht aktualisiert).
+2. Danach `feature/godot-importer` beginnen: Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) einlesen und daraus GameArea-Nodes mit Polygon2D-Children, Label sowie Farb-ID/Zielfarbe erzeugen.
 
 ## Ziel des folgenden Entwicklungsblocks
 
