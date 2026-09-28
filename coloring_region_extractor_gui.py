@@ -3509,47 +3509,89 @@ class ColoringRegionExtractor(tk.Tk):
     # SVG outline vectorization
     # ------------------------------------------------------------------
 
-    def _closed_catmull_rom_svg_path(self, points, tension=0.92):
-        """
-        Convert a closed polygon into a smooth cubic Bezier SVG subpath.
+    def _closed_curve_segments(self, points, tension=1.0, hard_corners=None):
+        """Return the cubic segments shared by the SVG and mesh exports.
 
-        Catmull-Rom style control points preserve the overall contour while
-        replacing the many short raster-derived line segments with continuous
-        curves. `tension` below 1.0 slightly reduces overshoot on tight details.
+        Centripetal chord parameters make the tangent depend on the actual
+        spacing of adjacent anchors. Very short edges are removed before the
+        parameters are built so duplicate anchors cannot create singularities.
         """
         pts = np.asarray(points, dtype=np.float64)
-
         if len(pts) < 3:
-            return ""
+            return []
 
         cleaned = [pts[0]]
         for point in pts[1:]:
             if np.linalg.norm(point - cleaned[-1]) > 1e-6:
                 cleaned.append(point)
-
+        if len(cleaned) > 1 and np.linalg.norm(cleaned[-1] - cleaned[0]) <= 1e-6:
+            cleaned.pop()
         pts = np.asarray(cleaned, dtype=np.float64)
-        n = len(pts)
+        if len(pts) < 3:
+            return []
 
-        if n < 3:
+        # t[i+1] - t[i] = ||p[i+1] - p[i]||**alpha; alpha=0.5.
+        edge_lengths = np.linalg.norm(np.roll(pts, -1, axis=0) - pts, axis=1)
+        steps = np.sqrt(np.maximum(edge_lengths, 1e-12))
+        # Only explicitly detected hard corners break tangent continuity.
+        # A rounded but narrow petal tip can also have a large turning angle.
+        corners = np.zeros(len(pts), dtype=bool)
+        if hard_corners is not None:
+            for corner in hard_corners:
+                distances = np.linalg.norm(pts - corner, axis=1)
+                index = int(np.argmin(distances))
+                if distances[index] <= 1e-5:
+                    corners[index] = True
+        segments = []
+        for i in range(len(pts)):
+            prev = (i - 1) % len(pts)
+            nxt = (i + 1) % len(pts)
+            after = (i + 2) % len(pts)
+            left, middle, right = steps[prev], steps[i], steps[nxt]
+            start, end = pts[i], pts[nxt]
+            tangent_start = (
+                (start - pts[prev]) / left
+                - (end - pts[prev]) / (left + middle)
+                + (end - start) / middle
+            )
+            tangent_end = (
+                (end - start) / middle
+                - (pts[after] - start) / (middle + right)
+                + (pts[after] - end) / right
+            )
+            c1 = start + (float(tension) * middle / 3.0) * tangent_start
+            c2 = end - (float(tension) * middle / 3.0) * tangent_end
+            if corners[i]:
+                c1 = start + (end - start) * (float(tension) / 3.0)
+            if corners[nxt]:
+                c2 = end - (end - start) * (float(tension) / 3.0)
+            segments.append((start, c1, c2, end))
+        return segments
+
+    def _closed_catmull_rom_svg_path(
+        self, points, tension=1.0, hard_corners=None,
+    ):
+        """
+        Convert a closed polygon into a smooth cubic Bezier SVG subpath.
+
+        The SVG and mesh use the same centripetal Catmull-Rom-derived cubic
+        segments. Only corners with straight support break tangent continuity.
+        """
+        segments = self._closed_curve_segments(
+            points, tension=tension, hard_corners=hard_corners,
+        )
+        if not segments:
             return ""
+        start = segments[0][0]
+        parts = [f"M {start[0]:.2f},{start[1]:.2f}"]
 
-        parts = [f"M {pts[0][0]:.2f},{pts[0][1]:.2f}"]
-        factor = float(tension) / 6.0
-
-        for i in range(n):
-            p0 = pts[(i - 1) % n]
-            p1 = pts[i]
-            p2 = pts[(i + 1) % n]
-            p3 = pts[(i + 2) % n]
-
-            c1 = p1 + (p2 - p0) * factor
-            c2 = p2 - (p3 - p1) * factor
+        for _start, c1, c2, end in segments:
 
             parts.append(
                 "C "
                 f"{c1[0]:.2f},{c1[1]:.2f} "
                 f"{c2[0]:.2f},{c2[1]:.2f} "
-                f"{p2[0]:.2f},{p2[1]:.2f}"
+                f"{end[0]:.2f},{end[1]:.2f}"
             )
 
         parts.append("Z")
@@ -3633,6 +3675,37 @@ class ColoringRegionExtractor(tk.Tk):
             dtype=np.float64,
         )
 
+    def _hard_corner_indices(self, points):
+        """Find angular tips with straight support on both sides.
+
+        A tight rounded tip can turn just as much as a polygon corner. The
+        neighboring runs must also be straight before it is treated as a
+        deliberate discontinuity of the tangent.
+        """
+        pts = np.asarray(points, dtype=np.float64)
+        if len(pts) < 24:
+            return []
+        angles = self._curvature_scores(pts)
+        corners = []
+        for i, angle in enumerate(angles):
+            if angle < np.deg2rad(35.0):
+                continue
+            if angle < angles[(i - 1) % len(pts)] or angle < angles[(i + 1) % len(pts)]:
+                continue
+            straight = True
+            for direction in (-1, 1):
+                indices = [(i + direction * j) % len(pts) for j in range(3, 10)]
+                error = max(
+                    self._point_segment_distance(pts[j], pts[indices[0]], pts[indices[-1]])
+                    for j in indices
+                )
+                if error > 0.65:
+                    straight = False
+                    break
+            if straight:
+                corners.append(i)
+        return corners
+
     def _smooth_closed_contour(self, points, passes=3):
         """
         Apply a gentle periodic low-pass filter to a closed contour.
@@ -3673,6 +3746,15 @@ class ColoringRegionExtractor(tk.Tk):
                 )
 
             out = smoothed
+
+        # Keep deliberately angular corners in place. Rounded narrow tips are
+        # not classified as hard corners and continue to receive smoothing.
+        protected = self._hard_corner_indices(pts)
+        for index in protected:
+            for offset, weight in ((-2, 0.25), (-1, 0.6), (0, 1.0),
+                                   (1, 0.6), (2, 0.25)):
+                j = (index + offset) % len(pts)
+                out[j] = out[j] * (1.0 - weight) + pts[j] * weight
 
         return out
 
@@ -3753,6 +3835,7 @@ class ColoringRegionExtractor(tk.Tk):
         tolerance=0.50,
         curvature_keep=0.14,
         min_points=10,
+        hard_corners=None,
     ):
         """
         Curvature-aware simplification of an already smoothed closed contour.
@@ -3789,6 +3872,10 @@ class ColoringRegionExtractor(tk.Tk):
                 )
             )
             keep.add(idx)
+
+        if hard_corners is not None:
+            for corner in hard_corners:
+                keep.add(int(np.argmin(np.linalg.norm(pts - corner, axis=1))))
 
         curvature = self._curvature_scores(pts)
 
@@ -3938,6 +4025,8 @@ class ColoringRegionExtractor(tk.Tk):
             if len(points) < 5:
                 continue
 
+            hard_corners = points[self._hard_corner_indices(points)]
+
             points = self._smooth_closed_contour(
                 points,
                 passes=3,
@@ -3961,14 +4050,16 @@ class ColoringRegionExtractor(tk.Tk):
                 tolerance=tolerance,
                 curvature_keep=0.14,
                 min_points=10,
+                hard_corners=hard_corners,
             )
 
             points_after += len(simplified)
 
-            # Slightly lower tension is safer once fewer anchors remain.
+            # Full tangents avoid flattening the curve at retained anchors.
             subpath = self._closed_catmull_rom_svg_path(
                 simplified,
-                tension=0.44,
+                tension=1.0,
+                hard_corners=hard_corners,
             )
 
             if subpath:
@@ -4379,8 +4470,9 @@ class ColoringRegionExtractor(tk.Tk):
     def _sample_closed_catmull_rom(
         self,
         points,
-        tension=0.44,
+        tension=1.0,
         max_error=0.02,
+        hard_corners=None,
     ):
         """
         Sample the same cubic curve used by the SVG outline export.
@@ -4390,39 +4482,19 @@ class ColoringRegionExtractor(tk.Tk):
         curved sections are subdivided until ``max_error`` is reached. The SVG
         itself remains unchanged.
         """
-        pts = np.asarray(points, dtype=np.float64)
-
-        if len(pts) < 3:
-            return pts
-
-        cleaned = [pts[0]]
-        for point in pts[1:]:
-            if np.linalg.norm(point - cleaned[-1]) > 1e-6:
-                cleaned.append(point)
-
-        pts = np.asarray(cleaned, dtype=np.float64)
-        n = len(pts)
-
-        if n < 3:
-            return pts
-
-        factor = float(tension) / 6.0
+        segments = self._closed_curve_segments(
+            points, tension=tension, hard_corners=hard_corners,
+        )
+        if not segments:
+            return np.asarray(points, dtype=np.float64)
         sampled = []
 
-        for i in range(n):
-            p0 = pts[(i - 1) % n]
-            p1 = pts[i]
-            p2 = pts[(i + 1) % n]
-            p3 = pts[(i + 2) % n]
-
-            c1 = p1 + (p2 - p0) * factor
-            c2 = p2 - (p3 - p1) * factor
-
+        for start, c1, c2, end in segments:
             segment = self._sample_cubic_bezier_adaptive(
-                p1,
+                start,
                 c1,
                 c2,
-                p2,
+                end,
                 max_error=max_error,
             )
 
@@ -4505,6 +4577,8 @@ class ColoringRegionExtractor(tk.Tk):
             if len(points) < 5:
                 continue
 
+            hard_corners = points[self._hard_corner_indices(points)]
+
             points = self._smooth_closed_contour(
                 points,
                 passes=3,
@@ -4517,13 +4591,15 @@ class ColoringRegionExtractor(tk.Tk):
                 tolerance=tolerance,
                 curvature_keep=0.14,
                 min_points=10,
+                hard_corners=hard_corners,
             )
             if len(simplified) < 3:
                 continue
 
             sampled = self._sample_closed_catmull_rom(
                 simplified,
-                tension=0.44,
+                tension=1.0,
+                hard_corners=hard_corners,
             )
             if len(sampled) >= 3:
                 rings[contour_index] = sampled

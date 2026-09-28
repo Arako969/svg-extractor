@@ -1,3 +1,4 @@
+import re
 import struct
 import tempfile
 import unittest
@@ -119,17 +120,11 @@ class OutlineMeshGeometryTests(unittest.TestCase):
             max_error=0.02,
         )
 
-        factor = tension / 6.0
         deviations = []
 
-        for index in range(len(anchors)):
-            p0 = anchors[(index - 1) % len(anchors)]
-            p1 = anchors[index]
-            p2 = anchors[(index + 1) % len(anchors)]
-            p3 = anchors[(index + 2) % len(anchors)]
-            c1 = p1 + (p2 - p0) * factor
-            c2 = p2 - (p3 - p1) * factor
-
+        for p1, c1, c2, p2 in extractor._closed_curve_segments(
+            anchors, tension=tension,
+        ):
             for parameter in np.linspace(0.0, 1.0, 201):
                 inverse = 1.0 - parameter
                 curve_point = (
@@ -143,6 +138,57 @@ class OutlineMeshGeometryTests(unittest.TestCase):
                 )
 
         self.assertLessEqual(max(deviations), 0.02)
+
+    def test_svg_and_mesh_share_segments_with_irregular_and_duplicate_anchors(self):
+        extractor = object.__new__(ColoringRegionExtractor)
+        anchors = np.asarray([
+            [0.0, 0.0], [12.0, 0.0], [12.00000001, 0.0],
+            [12.4, 0.8], [8.0, 10.0], [0.0, 8.0], [0.0, 0.0],
+        ])
+        segments = extractor._closed_curve_segments(anchors)
+        self.assertEqual(len(segments), 5)
+        self.assertTrue(np.isfinite(np.asarray(segments)).all())
+        for previous, current in zip(segments, segments[1:] + segments[:1]):
+            np.testing.assert_allclose(previous[3], current[0], atol=0)
+        path = extractor._closed_catmull_rom_svg_path(anchors)
+        self.assertEqual(path.count(" C "), len(segments))
+        sampled = extractor._sample_closed_catmull_rom(anchors)
+        self.assertTrue(np.isfinite(sampled).all())
+        for start, _, _, _ in segments:
+            self.assertLessEqual(_distance_to_closed_polyline(start, sampled), 1e-9)
+
+    def test_straight_supported_corners_are_kept_but_round_arcs_are_not(self):
+        extractor = object.__new__(ColoringRegionExtractor)
+        rectangle = np.asarray(
+            [(x, 0.0) for x in range(0, 41, 2)]
+            + [(40.0, y) for y in range(2, 21, 2)]
+            + [(x, 20.0) for x in range(38, -1, -2)]
+            + [(0.0, y) for y in range(18, 0, -2)],
+            dtype=np.float64,
+        )
+        circle = np.asarray([
+            [20.0 + 20.0 * np.cos(a), 20.0 + 20.0 * np.sin(a)]
+            for a in np.linspace(0.0, 2.0 * np.pi, 80, endpoint=False)
+        ])
+        corner_indices = extractor._hard_corner_indices(rectangle)
+        self.assertEqual(len(corner_indices), 4)
+        self.assertEqual(extractor._hard_corner_indices(circle), [])
+        corners = rectangle[corner_indices]
+        segments = extractor._closed_curve_segments(
+            rectangle, hard_corners=corners,
+        )
+        for index in corner_indices:
+            previous = segments[(index - 1) % len(segments)]
+            following = segments[index]
+            # The two handles follow their own edge at a deliberate corner.
+            self.assertLessEqual(
+                extractor._point_segment_distance(previous[2], previous[0], previous[3]),
+                1e-9,
+            )
+            self.assertLessEqual(
+                extractor._point_segment_distance(following[1], following[0], following[3]),
+                1e-9,
+            )
 
     def test_adaptive_sampling_uses_more_points_for_curved_segments(self):
         extractor = object.__new__(ColoringRegionExtractor)
@@ -171,10 +217,8 @@ class OutlineMeshGeometryTests(unittest.TestCase):
         extractor = object.__new__(ColoringRegionExtractor)
         anchors = np.asarray(
             [
-                [0.0, 0.0],
-                [16.0, 1.0],
-                [14.0, 11.0],
-                [2.0, 14.0],
+                [16.0 * np.cos(theta), 12.0 * np.sin(theta)]
+                for theta in np.linspace(0.0, 2.0 * np.pi, 12, endpoint=False)
             ],
             dtype=np.float64,
         )
@@ -198,6 +242,20 @@ class OutlineMeshGeometryTests(unittest.TestCase):
 
         self.assertEqual(mesh["vertices"], [])
         self.assertEqual(mesh["indices"], [])
+
+    def test_svg_and_mesh_rings_start_on_the_same_contours(self):
+        line_mask = np.zeros((96, 96), dtype=np.uint8)
+        cv2.circle(line_mask, (48, 48), 30, 255, 8, lineType=cv2.LINE_8)
+        extractor = _extractor_with_line_mask(line_mask)
+        path = extractor._outline_svg_path_data()
+        rings, _ = extractor._outline_mesh_rings()
+        starts = np.asarray([
+            (float(x), float(y))
+            for x, y in re.findall(r"\bM (-?\d+\.\d+),(-?\d+\.\d+)", path)
+        ])
+        self.assertEqual(len(starts), len(rings))
+        for start, ring in zip(starts, rings.values()):
+            np.testing.assert_allclose(start, ring[0], rtol=0.0, atol=0.01)
 
     def test_ring_mesh_is_valid_and_preserves_its_hole(self):
         line_mask = np.zeros((96, 96), dtype=np.uint8)

@@ -14,13 +14,15 @@ Letzte Verifikation gegen Quellcode und Git-Historie: 27.09.2026 (PR #5–#8)
 1. **Game Export v3** (PR #3, Commit `bcc13d9`, gemergt 2026-09-18).
 2. **Vektor-Outline-Mesh & Render-Geometrie für Godot** (PR #4, Commit `9c2dd17`, gemergt 2026-09-19).
 3. **Outline-Mesh mit automatisierten Geometrietests abgesichert** (PR #6, Commit `4073709`, gemergt 2026-09-27): `tests/test_outline_mesh_geometry.py` sowie ein GitHub-Actions-Workflow (`.github/workflows/tests.yml`), der diese Tests bei Push/PR auf `main` ausführt. Keine Änderung an `coloring_region_extractor_gui.py`; reine Testinfrastruktur, keine Versionsrelevanz.
-4. **Outline-Mesh adaptiv tessellieren** (PR #8, Commit `9b970b4`, gemergt 2026-09-27): ersetzt die feste Schrittabtastung der Catmull-Rom-Segmente im Outline-Mesh durch adaptive, fehlerbasierte De-Casteljau-Tessellierung (`_sample_cubic_bezier_adaptive`, Fehlerbudget `0.02 px`, max. Tiefe `16`), damit die Outline auch bei starkem Zoom (bis 24-fach) glatt bleibt. Betrifft nur das triangulierte Godot-Outline-Mesh, nicht den SVG-Export. Testsuite auf 7 Tests erweitert. Der laut Branch-Dokumentation vor dem Merge vorgesehene manuelle visuelle Test (Hundemotiv, Godot-VectorColoringTest, 24-facher Zoom) lässt sich aus dem Repository allein nicht verifizieren.
+4. **Outline-Mesh adaptiv tessellieren** (PR #8, Commit `9b970b4`, gemergt 2026-09-27): ersetzt die feste Schrittabtastung der Catmull-Rom-Segmente im Outline-Mesh durch adaptive, fehlerbasierte De-Casteljau-Tessellierung (`_sample_cubic_bezier_adaptive`, Fehlerbudget `0.02 px`, max. Tiefe `16`). Betrifft nur das triangulierte Godot-Outline-Mesh, nicht den SVG-Export. Testsuite auf 7 Tests erweitert. **Korrektur:** Die zunächst dokumentierte Annahme, dies allein mache die Outline bei starkem Zoom glatt, war unvollständig — sichtbare Knicke blieben bestehen, siehe Punkt 5.
 
-Alle vier sind vollständig im Code auf `main` vorhanden; es existiert kein offener Feature-Branch mehr dafür. `VERSION` und `CHANGELOG.md` wurden für die produktrelevanten Änderungen (1, 2, 4) noch nicht aktualisiert; eine Versionsentscheidung steht noch aus (siehe `GIT_WORKFLOW.md`, Abschnitt Release: nur auf ausdrückliche Entscheidung).
+Zusätzlich existiert der offene Branch `fix/outline-curve-corners` (PR ausstehend): Nach PR #8 blieben Knicke sichtbar, auch direkt in der Game-SVG (Illustrator). Ursache war die zugrunde liegende Kurve, nicht die Mesh-Abtastdichte. `_closed_curve_segments()` ist jetzt die gemeinsame Quelle kubischer Bezier-Segmente für SVG-Pfad und Mesh-Ring (zentripetale Catmull-Rom-Parametrisierung `alpha=0.5`, volle Tangenten `tension=1.0`); `_hard_corner_indices()` schützt echte Ecken (Winkel ≥ 35° mit gerader Nachbarstützung) vor Überglättung, runde Spitzen bleiben weich. Betrifft SVG- **und** Mesh-Export gemeinsam. Testsuite auf 10 Tests erweitert. Binärformat, Game JSON v3 und `points`/`render_points`-Trennung unverändert; keine neue Architekturentscheidung. Visuell geprüft: einfache Formen sowie eine Blütenspitze des Hundemotivs; weitere Motivtypen offen.
+
+Alle vier gemergten sind vollständig im Code auf `main` vorhanden. `VERSION` und `CHANGELOG.md` wurden für die produktrelevanten Änderungen (1, 2, 4) noch nicht aktualisiert; eine Versionsentscheidung steht noch aus (siehe `GIT_WORKFLOW.md`, Abschnitt Release: nur auf ausdrückliche Entscheidung).
 
 ## Aktueller Entwicklungszweig
 
-`main`. Es existiert aktuell kein offener Feature-Branch in diesem Repository.
+`main`. Zusätzlich existiert der offene Branch `fix/outline-curve-corners` (PR ausstehend), siehe oben.
 
 ## Projektziel
 
@@ -64,11 +66,12 @@ Details: `systems/EXPORT_PIPELINE.md`, `decisions/ADR-003-json-gameplay-geometry
 
 ## Nächste Schritte
 
-1. Versionsentscheidung für den aktuellen `main`-Stand treffen (Game Export v3, Outline-Mesh und dessen adaptive Tessellierung sind bereits gemergt und laut bisheriger Dokumentation getestet).
-2. `feature/godot-importer` beginnen: Godot Importer für Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) entwickeln.
-3. Klicklogik für Game Areas in Godot umsetzen.
-4. Performance mit komplexen Seiten testen.
-5. Die SVG-/Outline-Mesh-Pipeline an weiteren Motivtypen testen (offener Langzeittest, kein Blocker).
+1. `fix/outline-curve-corners` mergen (zentripetale Kurvensegmente mit Eckenschutz, gemeinsam für SVG und Mesh).
+2. Versionsentscheidung für den aktuellen `main`-Stand treffen (Game Export v3, Outline-Mesh und dessen Tessellierung/Kurvenkorrektur sind bereits gemergt bzw. in Arbeit und laut bisheriger Dokumentation getestet).
+3. `feature/godot-importer` beginnen: Godot Importer für Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) entwickeln.
+4. Klicklogik für Game Areas in Godot umsetzen.
+5. Performance mit komplexen Seiten testen.
+6. Die SVG-/Outline-Mesh-Pipeline an weiteren Motivtypen testen (offener Langzeittest, kein Blocker).
 
 ## Bekannte Grenzen
 

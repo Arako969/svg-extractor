@@ -31,13 +31,22 @@ Die dokumentierte Pipeline umfasst:
 - symmetrische Glättung
 - Extraktion der geglätteten Kontur
 - Resampling
-- Konturglättung
-- geschlossene Bezier-Geometrie (Catmull-Rom, Tension `0.44`)
+- Konturglättung (mit Eckenschutz, siehe unten)
+- geschlossene Bezier-Geometrie: zentripetale Catmull-Rom-Parametrisierung (`alpha=0.5`), volle Tangenten (`_closed_curve_segments()`, `tension=1.0`)
 - konservative Douglas-Peucker-Vereinfachung
 - zusätzliche Ankerpunkte in Bereichen höherer Krümmung
 - einstellbare Pixel-Toleranz von `0,20` bis `1,20 px`
 
 Qualitätspriorität: sichtbare Outline und geschlossene Geometrie vor maximaler Dateireduktion.
+
+#### Zentripetale Kurvensegmente mit Eckenschutz (SVG und Mesh gemeinsam)
+
+`_closed_curve_segments()` ist die gemeinsame Quelle kubischer Bezier-Segmente für den SVG-Pfad (`_closed_catmull_rom_svg_path()`) und den Mesh-Ring (`_sample_closed_catmull_rom()`), damit beide Kurven nicht auseinanderlaufen:
+
+- Zentripetale Parametrisierung (`alpha=0.5`, Zeitparameter aus Sehnenlängen) statt uniformer Parametrisierung, volle Tangenten (`tension=1.0`) statt der früheren Dämpfung.
+- `_hard_corner_indices()` erkennt echte Ecken (Winkel ≥ 35° mit gerader Nachbarstützung, Geradheitsfehler ≤ 0.65 px über die benachbarten Abtastpunkte) und schützt sie vor Überglättung (`_smooth_closed_contour()`) und Wegfall bei der Vereinfachung (`_simplify_smooth_closed_contour()`); diese Anker erhalten getrennte Ein-/Austrittstangenten statt einer durchgehend geglätteten Kurve. Eng gerundete, tatsächlich runde Spitzen bleiben weich.
+- Grund: Nach der adaptiven Mesh-Tessellierung blieben Knicke sichtbar — auch direkt in der SVG. Die Ursache lag in der Kurve selbst, nicht in der Abtastdichte.
+- Details zur Korrektur/Historie: `../decisions/ADR-005-outline-mesh-for-godot.md`.
 
 ## Game JSON v3
 
@@ -84,8 +93,8 @@ Die Catmull-Rom-Segmente innerhalb von `_outline_mesh_rings()` werden für das O
 
 - Standard-Fehlerbudget `0.02 px`, maximale Unterteilungstiefe `16`.
 - Gerade Kurvenabschnitte erzeugen kaum Punkte, gekrümmte Abschnitte werden bis zum Erreichen der Toleranz unterteilt.
-- Betrifft ausschließlich das triangulierte Outline-Mesh für Godot; der SVG-Outline-Export (`_closed_catmull_rom_svg_path()`) bleibt unverändert, da SVG kubische Bezier-Kurven nativ ohne Abtastung darstellt.
-- Ziel: sichtbar glatte Outline auch bei starkem Zoom (getestet bis 24-fach) ohne unnötig dichte Vertex-Verteilung in ruhigen Konturbereichen.
+- Betrifft nur die Abtastdichte des triangulierten Outline-Mesh; der SVG-Outline-Export stellt kubische Bezier-Kurven nativ ohne Abtastung dar. Die zugrunde liegende Kurvenform selbst (Parametrisierung, Eckenschutz) ist seit `fix/outline-curve-corners` zwischen SVG und Mesh geteilt (siehe oben).
+- Reduziert unnötig dichte Vertex-Verteilung in ruhigen Konturbereichen bei gegebener Kurve; behebt für sich genommen keine Knicke, die in der Kurve selbst liegen (siehe Korrektur oben und in `../decisions/ADR-005-outline-mesh-for-godot.md`).
 
 Details zur Entscheidung: `../decisions/ADR-005-outline-mesh-for-godot.md`.
 
@@ -97,9 +106,14 @@ Details zur Entscheidung: `../decisions/ADR-005-outline-mesh-for-godot.md`.
 - Die adaptive Abtastung hält das Fehlerbudget (`max_error`) gegenüber der kubischen Bezier-Kurve ein.
 - Gekrümmte Segmente erhalten mehr Abtastpunkte als gerade Segmente (`_sample_cubic_bezier_adaptive`).
 - Ein kleineres Fehlerbudget erhöht die Abtastdichte.
+- SVG-Pfad und Mesh-Ring nutzen dieselben Segmente auch bei kurzen/doppelten Ankerpunkten (`_closed_curve_segments`).
+- Echte Ecken mit gerader Nachbarstützung werden erkannt und erhalten getrennte Tangenten, runde Bögen dagegen nicht (`_hard_corner_indices`).
+- SVG-Ring und Mesh-Ring starten am selben Konturpunkt.
 - Verarbeitung einer leeren Linienmaske (`_outline_mesh_data()` liefert ein leeres Mesh).
 - Ein gültiges, degenerationsfreies Ring-Mesh mit erhaltener zentraler Aussparung.
 - Den binären `LCSM`-v1-Export (`_write_outline_mesh_binary()`) auf Byte-Ebene.
+
+Umfang: 10 Tests (Stand `fix/outline-curve-corners`).
 
 Ausführung: `python3 -m unittest discover -s tests -v`, automatisiert per GitHub Actions (`.github/workflows/tests.yml`) bei Push/PR auf `main`.
 
