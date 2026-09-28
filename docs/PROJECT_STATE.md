@@ -1,7 +1,7 @@
 # Projektstatus
 
 Letzte Migration der Dokumentation: 27.09.2026
-Letzte Verifikation gegen Quellcode und Git-Historie: 27.09.2026 (PR #5–#8)
+Letzte Verifikation gegen Quellcode und Git-Historie: 28.09.2026 (PR #5–#10)
 
 ## Aktueller Release (VERSION / CHANGELOG)
 
@@ -9,20 +9,19 @@ Letzte Verifikation gegen Quellcode und Git-Historie: 27.09.2026 (PR #5–#8)
 
 ## Stand auf `main` (verifiziert)
 
-`main` enthält gegenüber dem Tag `v0.11.0` bereits vier weitere gemergte Arbeitseinheiten, die noch nicht versioniert bzw. veröffentlicht wurden (eine davon, PR #6, ist reine Testinfrastruktur ohne Versionsrelevanz):
+`main` enthält gegenüber dem Tag `v0.11.0` bereits fünf weitere gemergte Arbeitseinheiten, die noch nicht versioniert bzw. veröffentlicht wurden (eine davon, PR #6, ist reine Testinfrastruktur ohne Versionsrelevanz):
 
 1. **Game Export v3** (PR #3, Commit `bcc13d9`, gemergt 2026-09-18).
 2. **Vektor-Outline-Mesh & Render-Geometrie für Godot** (PR #4, Commit `9c2dd17`, gemergt 2026-09-19).
 3. **Outline-Mesh mit automatisierten Geometrietests abgesichert** (PR #6, Commit `4073709`, gemergt 2026-09-27): `tests/test_outline_mesh_geometry.py` sowie ein GitHub-Actions-Workflow (`.github/workflows/tests.yml`), der diese Tests bei Push/PR auf `main` ausführt. Keine Änderung an `coloring_region_extractor_gui.py`; reine Testinfrastruktur, keine Versionsrelevanz.
 4. **Outline-Mesh adaptiv tessellieren** (PR #8, Commit `9b970b4`, gemergt 2026-09-27): ersetzt die feste Schrittabtastung der Catmull-Rom-Segmente im Outline-Mesh durch adaptive, fehlerbasierte De-Casteljau-Tessellierung (`_sample_cubic_bezier_adaptive`, Fehlerbudget `0.02 px`, max. Tiefe `16`). Betrifft nur das triangulierte Godot-Outline-Mesh, nicht den SVG-Export. Testsuite auf 7 Tests erweitert. **Korrektur:** Die zunächst dokumentierte Annahme, dies allein mache die Outline bei starkem Zoom glatt, war unvollständig — sichtbare Knicke blieben bestehen, siehe Punkt 5.
+5. **Outline-Kurven zentripetal parametrisiert und Ecken geschützt** (PR #10, Commit `09fbabd`, gemergt 2026-09-28): `_closed_curve_segments()` als gemeinsame Quelle kubischer Bezier-Segmente für SVG-Pfad und Mesh-Ring (zentripetale Catmull-Rom-Parametrisierung `alpha=0.5`, volle Tangenten `tension=1.0` statt bisher `0.44`). `_hard_corner_indices()` schützt echte Ecken (Winkel ≥ 35° mit gerader Nachbarstützung, Geradheitsfehler ≤ 0.65 px) vor Überglättung und vor Wegfall bei der Vereinfachung; eng gerundete, tatsächlich runde Spitzen bleiben weich. Behebt die nach PR #8 verbliebenen sichtbaren Knicke (Ursache lag in der Kurve selbst, nicht in der Mesh-Abtastdichte). Betrifft SVG- **und** Mesh-Export gemeinsam. Testsuite auf 10 Tests erweitert. Binärformat, Game JSON v3 und `points`/`render_points`-Trennung unverändert; keine neue Architekturentscheidung. Visuell geprüft (vor Merge): einfache Formen, Blütenspitze und vollständiges Hundemotiv; weitere Motivtypen bleiben ein späterer Langzeittest.
 
-Zusätzlich existiert der offene Branch `fix/outline-curve-corners` (PR ausstehend): Nach PR #8 blieben Knicke sichtbar, auch direkt in der Game-SVG (Illustrator). Ursache war die zugrunde liegende Kurve, nicht die Mesh-Abtastdichte. `_closed_curve_segments()` ist jetzt die gemeinsame Quelle kubischer Bezier-Segmente für SVG-Pfad und Mesh-Ring (zentripetale Catmull-Rom-Parametrisierung `alpha=0.5`, volle Tangenten `tension=1.0`); `_hard_corner_indices()` schützt echte Ecken (Winkel ≥ 35° mit gerader Nachbarstützung) vor Überglättung, runde Spitzen bleiben weich. Betrifft SVG- **und** Mesh-Export gemeinsam. Testsuite auf 10 Tests erweitert. Binärformat, Game JSON v3 und `points`/`render_points`-Trennung unverändert; keine neue Architekturentscheidung. Visuell geprüft: einfache Formen sowie eine Blütenspitze des Hundemotivs; weitere Motivtypen offen.
-
-Alle vier gemergten sind vollständig im Code auf `main` vorhanden. `VERSION` und `CHANGELOG.md` wurden für die produktrelevanten Änderungen (1, 2, 4) noch nicht aktualisiert; eine Versionsentscheidung steht noch aus (siehe `GIT_WORKFLOW.md`, Abschnitt Release: nur auf ausdrückliche Entscheidung).
+Alle fünf sind vollständig im Code auf `main` vorhanden; es existiert kein offener Feature-Branch mehr dafür. `VERSION` und `CHANGELOG.md` wurden für die produktrelevanten Änderungen (1, 2, 4, 5) noch nicht aktualisiert; eine Versionsentscheidung steht noch aus (siehe `GIT_WORKFLOW.md`, Abschnitt Release: nur auf ausdrückliche Entscheidung).
 
 ## Aktueller Entwicklungszweig
 
-`main`. Zusätzlich existiert der offene Branch `fix/outline-curve-corners` (PR ausstehend), siehe oben.
+`main`. Es existiert aktuell kein offener Feature-Branch in diesem Repository.
 
 ## Projektziel
 
@@ -59,19 +58,18 @@ Die Pipeline soll aus einer Illustration technische Regionen erzeugen, Korrektur
 
 - **Game Export v3**: explizite Gameplay-Geometrie (`regions[].points`) und einheitliche Game-Area-Struktur (`game_areas`, inklusive impliziter Ein-Region-Game-Areas über `is_implicit`) im Game JSON.
 - **Render-Geometrie**: `regions[].render_points` mit derselben Outline-Überdeckung (`bleed_px=3`), die der SVG-Export verwendet.
-- **Vektor-Outline-Mesh**: trianguliertes Binärformat `*_outline.meshbin` (`lcs_outline_mesh_v1`) für Godot, benötigt `shapely`; bei fehlender Abhängigkeit wird das Game JSON dennoch gespeichert (`outline_mesh: null`, Warnhinweis in der GUI). Seit PR #8 mit fehlerbasierter adaptiver Tessellierung (`_sample_cubic_bezier_adaptive`, Fehlerbudget `0.02 px`) statt fester Schrittabtastung.
-- **Automatisierte Geometrietests** (PR #6, nicht versionsrelevant): `tests/test_outline_mesh_geometry.py` (7 Tests) und GitHub-Actions-Workflow `.github/workflows/tests.yml` bei Push/PR auf `main`.
+- **Vektor-Outline-Mesh**: trianguliertes Binärformat `*_outline.meshbin` (`lcs_outline_mesh_v1`) für Godot, benötigt `shapely`; bei fehlender Abhängigkeit wird das Game JSON dennoch gespeichert (`outline_mesh: null`, Warnhinweis in der GUI). Seit PR #8 mit fehlerbasierter adaptiver Tessellierung (`_sample_cubic_bezier_adaptive`, Fehlerbudget `0.02 px`) statt fester Schrittabtastung. Seit PR #10 mit zentripetal parametrisierten, eckengeschützten Kurvensegmenten, die sich SVG- und Mesh-Export teilen.
+- **Automatisierte Geometrietests** (PR #6, nicht versionsrelevant): `tests/test_outline_mesh_geometry.py` (10 Tests, Stand PR #10) und GitHub-Actions-Workflow `.github/workflows/tests.yml` bei Push/PR auf `main`.
 
 Details: `systems/EXPORT_PIPELINE.md`, `decisions/ADR-003-json-gameplay-geometry.md`, `decisions/ADR-005-outline-mesh-for-godot.md`.
 
 ## Nächste Schritte
 
-1. `fix/outline-curve-corners` mergen (zentripetale Kurvensegmente mit Eckenschutz, gemeinsam für SVG und Mesh).
-2. Versionsentscheidung für den aktuellen `main`-Stand treffen (Game Export v3, Outline-Mesh und dessen Tessellierung/Kurvenkorrektur sind bereits gemergt bzw. in Arbeit und laut bisheriger Dokumentation getestet).
-3. `feature/godot-importer` beginnen: Godot Importer für Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) entwickeln.
-4. Klicklogik für Game Areas in Godot umsetzen.
-5. Performance mit komplexen Seiten testen.
-6. Die SVG-/Outline-Mesh-Pipeline an weiteren Motivtypen testen (offener Langzeittest, kein Blocker).
+1. Versionsentscheidung für den aktuellen `main`-Stand treffen (Game Export v3, Outline-Mesh, dessen adaptive Tessellierung und die Kurvenkorrektur sind bereits gemergt und laut bisheriger Dokumentation getestet).
+2. `feature/godot-importer` beginnen: Godot Importer für Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) entwickeln.
+3. Klicklogik für Game Areas in Godot umsetzen.
+4. Performance mit komplexen Seiten testen.
+5. Die SVG-/Outline-Mesh-Pipeline an weiteren Motivtypen testen (offener Langzeittest, kein Blocker).
 
 ## Bekannte Grenzen
 

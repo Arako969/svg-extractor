@@ -1,7 +1,7 @@
 # Entwicklungsübergabe
 
 Letzte Migration der Dokumentation: 27.09.2026
-Letzte Verifikation gegen Quellcode und Git-Historie: 27.09.2026 (PR #5–#8)
+Letzte Verifikation gegen Quellcode und Git-Historie: 28.09.2026 (PR #5–#10)
 
 ## Projekt
 
@@ -13,7 +13,7 @@ Coloring Region Extractor für Cosy Desk - The Coloring Atelier.
 
 ## Aktueller Branch
 
-`main` sowie der offene Branch `fix/outline-curve-corners` (PR ausstehend).
+`main`. Kein offener Feature-Branch.
 
 ## Zuletzt abgeschlossen
 
@@ -21,21 +21,17 @@ Coloring Region Extractor für Cosy Desk - The Coloring Atelier.
 - **Auf `main` gemergt, noch nicht versioniert:** Game Export v3 (`coloring_game_export_v3`, PR #3, `bcc13d9`) — explizite Gameplay-Geometrie (`points`) und einheitliche Game-Area-Struktur (`game_areas`, `is_implicit`) im JSON.
 - **Auf `main` gemergt, noch nicht versioniert:** Vektor-Outline-Mesh & Render-Geometrie für Godot (PR #4, `9c2dd17`) — `render_points` pro Region sowie ein trianguliertes, binäres Outline-Mesh (`*_outline.meshbin`, Format `lcs_outline_mesh_v1`); benötigt die neue Abhängigkeit `shapely` (bereits in `requirements.txt`).
 - **Auf `main` gemergt (PR #6, nicht versionsrelevant):** Outline-Mesh mit automatisierten Geometrietests abgesichert — `tests/test_outline_mesh_geometry.py` (Catmull-Rom-Sampling, Näherungsqualität, leere Linienmaske, Ring-Mesh mit Aussparung, `LCSM v1`-Export) und GitHub-Actions-Workflow (`.github/workflows/tests.yml`) bei Push/PR auf `main`. Keine Änderung an `coloring_region_extractor_gui.py`; reine Testinfrastruktur.
-- **Auf `main` gemergt, noch nicht versioniert:** Outline-Mesh adaptiv tessellieren (PR #8, `9b970b4`) — feste Schrittabtastung der Catmull-Rom-Segmente im Outline-Mesh durch adaptive, fehlerbasierte De-Casteljau-Tessellierung ersetzt (`_sample_cubic_bezier_adaptive`, Fehlerbudget `0.02 px`, max. Tiefe `16`). Testsuite auf 7 Tests erweitert. Betrifft nur das Godot-Outline-Mesh, nicht den SVG-Export. **Korrektur:** Die Annahme, dies mache die Outline bei starkem Zoom allein glatt, war unvollständig — sichtbare Knicke blieben bestehen, siehe „Aktuell in Arbeit".
+- **Auf `main` gemergt, noch nicht versioniert:** Outline-Mesh adaptiv tessellieren (PR #8, `9b970b4`) — feste Schrittabtastung der Catmull-Rom-Segmente im Outline-Mesh durch adaptive, fehlerbasierte De-Casteljau-Tessellierung ersetzt (`_sample_cubic_bezier_adaptive`, Fehlerbudget `0.02 px`, max. Tiefe `16`). Testsuite auf 7 Tests erweitert. Betrifft nur das Godot-Outline-Mesh, nicht den SVG-Export. **Korrektur:** Die Annahme, dies mache die Outline bei starkem Zoom allein glatt, war unvollständig — sichtbare Knicke blieben bestehen, siehe folgender Punkt.
+- **Auf `main` gemergt, noch nicht versioniert:** Outline-Kurven zentripetal parametrisiert und Ecken geschützt (PR #10, `09fbabd`) — `_closed_curve_segments()` als gemeinsame Quelle kubischer Bezier-Segmente für SVG-Pfad (`_closed_catmull_rom_svg_path()`) und Mesh-Ring (`_sample_closed_catmull_rom()`): zentripetale Catmull-Rom-Parametrisierung (`alpha=0.5`), volle Tangenten (`tension=1.0` statt bisher `0.44`). `_hard_corner_indices()` schützt echte Ecken (Winkel ≥ 35° mit gerader Nachbarstützung, Geradheitsfehler ≤ 0.65 px) vor Überglättung und Wegfall bei der Vereinfachung; runde, eng gebogene Spitzen bleiben weich. Behebt die nach PR #8 verbliebenen sichtbaren Knicke (Ursache lag in der Kurve selbst, nicht in der Mesh-Abtastdichte). Betrifft SVG- **und** Mesh-Export gemeinsam. Testsuite auf 10 Tests erweitert. Binärformat, Game JSON v3, `points`/`render_points` unverändert; keine neue Architekturentscheidung. Vor dem Merge visuell geprüft: einfache Formen, Blütenspitze und vollständiges Hundemotiv im Godot-VectorColoringTest — sieht gut aus laut Rückmeldung des Projektinhabers. Weitere Motivtypen bleiben ein späterer Langzeittest.
 
 ## Aktuell in Arbeit
 
-`fix/outline-curve-corners` (PR ausstehend): Nach PR #8 blieben Knicke sichtbar — auch direkt in der Game-SVG (Illustrator, 800 %). Ursache war die zugrunde liegende Kurve, nicht die Mesh-Abtastdichte. `_closed_curve_segments()` ist jetzt die gemeinsame Quelle kubischer Bezier-Segmente für SVG-Pfad (`_closed_catmull_rom_svg_path()`) und Mesh-Ring (`_sample_closed_catmull_rom()`): zentripetale Catmull-Rom-Parametrisierung (`alpha=0.5`), volle Tangenten (`tension=1.0`). `_hard_corner_indices()` schützt echte Ecken (Winkel ≥ 35° mit gerader Nachbarstützung, Geradheitsfehler ≤ 0.65 px) vor Überglättung und Wegfall bei der Vereinfachung; runde, eng gebogene Spitzen bleiben weich. Betrifft SVG- **und** Mesh-Export gemeinsam. Testsuite auf 10 Tests erweitert. Binärformat, Game JSON v3, `points`/`render_points` unverändert; keine neue Architekturentscheidung.
-
-**Visuell geprüft (vor der Übergabe an Claude Code):** einfache Formen (Kreis, Ellipse, Sechseck, Stern) sowie die rechte Blütenspitze des Hundemotivs (Illustrator 800 %, Godot-VectorColoringTest) — ruhiger, keine zusätzlichen Mesh-Kanten/weißen Spalten an der geprüften Stelle.
-
-**Offen vor Merge:** Das Hundemotiv vollständig (nicht nur die eine Blütenspitze) sowie weitere Motivtypen erneut exportieren und im Godot-VectorColoringTest bei starkem Zoom visuell prüfen (manueller Schritt, nicht durch Claude Code verifizierbar).
+Kein offener Feature-Branch. `main` ist der aktuelle, vollständig gemergte Arbeitsstand.
 
 ## Nächster Arbeitsschritt
 
-1. Visuelle Prüfung von `fix/outline-curve-corners` am vollständigen Hundemotiv und weiteren Motivtypen durchführen, danach mergen.
-2. Versionsentscheidung für den `main`-Stand treffen (Game Export v3, Outline-Mesh, dessen adaptive Tessellierung und die Kurvenkorrektur sind bereits gemergt bzw. in Arbeit und laut bisheriger Dokumentation getestet; `VERSION`/`CHANGELOG.md` sind noch nicht aktualisiert).
-3. Danach `feature/godot-importer` beginnen: Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) einlesen und daraus GameArea-Nodes mit Polygon2D-Children, Label sowie Farb-ID/Zielfarbe erzeugen.
+1. Versionsentscheidung für den `main`-Stand treffen (Game Export v3, Outline-Mesh, dessen adaptive Tessellierung und die Kurvenkorrektur sind bereits gemergt und laut bisheriger Dokumentation getestet; `VERSION`/`CHANGELOG.md` sind noch nicht aktualisiert).
+2. Danach `feature/godot-importer` beginnen: Game SVG + Game JSON v3 (inklusive `render_points` und `*.meshbin`) einlesen und daraus GameArea-Nodes mit Polygon2D-Children, Label sowie Farb-ID/Zielfarbe erzeugen.
 
 ## Ziel des folgenden Entwicklungsblocks
 
