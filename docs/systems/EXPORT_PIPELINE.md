@@ -128,6 +128,12 @@ Ausführung: `python3 -m unittest discover -s tests -v`, automatisiert per GitHu
 - Preview PNG (`export_preview()`)
 - Projektdatei (`save_project()` / `load_project()`) für vollständigen Editor-Roundtrip
 
-## Nächster Integrationsschritt
+## Bekannte Grenzen des Exports
 
-Godot Importer entwickeln, der Game JSON v3 (inklusive `render_points` und `*.meshbin`) sowie das Game SVG in Game-Area-Nodes, Polygon2D-Children, Labels und Farbinformationen überführt.
+- Das Game JSON speichert keine Exportparameter (Schwelle, Lückenschluss, SVG-Outline-Toleranz); nur die Projektdatei (`save_project()`) enthält sie. Ein exportiertes Ergebnis ist daher nicht allein aus SVG, JSON und Mesh reproduzierbar (Zehn-Punkte-Plan, Punkt 7).
+- SVG, JSON und Mesh werden über getrennte Exportfunktionen erzeugt; ein gemeinsamer, konsistenter Game-Paket-Export existiert noch nicht (Zehn-Punkte-Plan, Punkt 6). Die Konturaufbereitung wird in `_outline_svg_path_data()` und `_outline_mesh_rings()` getrennt, aber mit denselben Parametern und derselben Segmentfunktion berechnet.
+- Die Eckenerkennung nutzt feste Grenzen (`35°`, `0.65 px`), siehe ADR-005.
+
+## Nächste Arbeit am Export
+
+Reihenfolge laut Zehn-Punkte-Plan in `../PROJECT_STATE.md`: zuerst Qualitätsstufen, danach Mesh-Vorschau, Game-Paket-Export und Exportparameter im JSON. Der Godot Importer für Game JSON v3 (inklusive `render_points` und `*.meshbin`) und das Game SVG ist separat geplant; seine Reihenfolge relativ zum Plan ist noch offen.
