@@ -39,8 +39,22 @@ Korrektur/Ergänzung:
 - Zentripetale Catmull-Rom-Parametrisierung (`alpha=0.5`, chord-length-basierte Zeitparameter) statt uniformer Parametrisierung, mit vollen Tangenten (`tension=1.0`) statt der bisherigen Dämpfung (`0.44`).
 - `_hard_corner_indices()` erkennt echte Ecken (Winkel ≥ 35° mit gerader Nachbarstützung, Geradheitsfehler ≤ 0.65 px über die benachbarten Abtastpunkte) und schützt sie vor dem Überglätten in `_smooth_closed_contour()` sowie vor dem Wegfallen in `_simplify_smooth_closed_contour()`; an diesen Ankern erhalten SVG- und Mesh-Segmente getrennte Ein-/Austrittstangenten. Eng gerundete, aber tatsächlich runde Spitzen werden weiterhin geglättet.
 - Betrifft `coloring_game_export_v3` nicht strukturell: Binärformat `lcs_outline_mesh_v1`, Game JSON v3 und die Trennung `points`/`render_points` bleiben unverändert. Keine neue Architekturentscheidung.
-- Visuell geprüft: einfache Formen (Kreis, Ellipse, Sechseck, Stern) sowie die rechte Blütenspitze des Hundemotivs (Illustrator 800 %, Godot-VectorColoringTest). Weitere Motivtypen bleiben offene Qualitätssicherung.
+- Visuell geprüft: einfache Formen (Kreis, Ellipse, Sechseck, Stern) sowie die rechte Blütenspitze des Hundemotivs (Illustrator 800 %, passendes Mesh in Godot); das Hundemotiv wurde vor dem Merge vom Projektinhaber geprüft. Nicht belegt: systematische Abnahme aller Zoomstufen und Motivtypen sowie ein Test bei genau 24-fachem Zoom. Weitere Motivtypen bleiben offene Qualitätssicherung.
+
+### Diagnosebefund
+
+Die sichtbare Formstörung steckte bereits in der exportierten SVG; Godot, MSAA und die Mesh-Abtastdichte waren nicht der Hebel. An der untersuchten Blütenspitze blieben nach der Vereinfachung wiederholt etwa 6 px zwischen Ankern, während die Richtung weiter wechselte. Der frühere Tangentenfaktor `0.44` bremste die Bezier-Kurve an diesen Ankern; vollere Tangenten glätteten den Verlauf sichtbar.
+
+### Verworfene Alternativen (nicht erneut versuchen)
+
+1. **Mesh-Fehlerbudget `0.005 px`** (statt `0.02 px`): keine erkennbare Verbesserung, da die Knicke in der Kurve selbst lagen. Nicht gemergt.
+2. **Zentripetale Parametrisierung mit unverändertem Tangentenfaktor `0.44`:** an der Problemstelle (Blütenspitze, Illustrator 800 %) keine erkennbare Verbesserung.
+3. **Pauschaler Eckenschutz** (jeder große Winkel wird zur harten Ecke): erzeugte am Hundemotiv einen künstlichen Dorn an der Blüte. Ersetzt durch den geradheitsabhängigen Eckenschutz (`_hard_corner_indices()`).
+
+### Bekannte Grenzen
+
+- Die Eckenerkennung nutzt feste geometrische Grenzen (Winkel `35°`, maximaler Geradheitsfehler `0.65 px` über die benachbarten Abtastpunkte). Bei anderen Motivgrößen und sehr kleinen Formen kann eine zusätzliche Prüfung nötig sein.
 
 ## Statushinweis
 
-Verifiziert am 27.09.2026 gegen `coloring_region_extractor_gui.py` (`_outline_mesh_data()`, `_write_outline_mesh_binary()`, `export_game_json()`) und die Git-Historie: die Implementierung ist auf `main` gemergt (Commit `9c2dd17`), aber noch nicht Teil eines versionierten Releases.
+Verifiziert am 28.09.2026 gegen `coloring_region_extractor_gui.py` (`_outline_mesh_data()`, `_write_outline_mesh_binary()`, `export_game_json()`, `_closed_curve_segments()`, `_hard_corner_indices()`) und die Git-Historie: Die Implementierung ist auf `main` gemergt (PR #4, Commit `9c2dd17`; Ergänzungen PR #8, Commit `9b970b4`, und PR #10, Commit `09fbabd`), aber noch nicht Teil eines versionierten Releases.
